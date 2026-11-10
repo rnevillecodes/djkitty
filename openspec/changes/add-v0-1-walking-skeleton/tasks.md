@@ -41,10 +41,10 @@
 
 ## 6. Track analysis
 
-- [ ] 6.1 Implement file stats extraction (duration, format, sample rate, channels, bitrate or "lossless", VBR via size/duration); verify with tests on fixture files of each format
-- [ ] 6.2 Implement 3-band waveform generation (biquad split at 250 Hz / 4 kHz, per-band peak at 150 bins/s, `u8` binary cache file per track, overview derived at ~1000 bins); verify with tests that a pure 60 Hz tone lands in the low band, a 8 kHz tone in the high band, and that bin count matches duration × 150
-- [ ] 6.3 Implement BPM detection (spectral-flux onset envelope via rustfft, autocorrelation over 60–200 BPM with tempo prior, unknown on weak peaks); verify with tests on generated click tracks at 90, 120, 128 and 174 BPM (±1 BPM or half/double) and on noise (unknown)
-- [ ] 6.4 Implement key detection (chromagram 50 Hz–5 kHz, Krumhansl–Schmuckler correlation, confidence threshold → unknown, Camelot + standard names); verify with tests on synthetic A-minor and C-major chord progressions and on noise (unknown)
+- [x] 6.1 Implement file stats extraction (duration, format, sample rate, channels, bitrate or "lossless", VBR via size/duration); verify with tests on fixture files of each format
+- [x] 6.2 Implement 3-band waveform generation (biquad split at 250 Hz / 4 kHz, per-band peak at 150 bins/s, `u8` binary cache file per track, overview derived at ~1000 bins); verify with tests that a pure 60 Hz tone lands in the low band, a 8 kHz tone in the high band, and that bin count matches duration × 150
+- [x] 6.3 Implement BPM detection (spectral-flux onset envelope via rustfft, autocorrelation over 60–200 BPM with tempo prior, unknown on weak peaks); verify with tests on generated click tracks at 90, 120, 128 and 174 BPM (±1 BPM or half/double) and on noise (unknown)
+- [x] 6.4 Implement key detection (chromagram 50 Hz–5 kHz, Krumhansl–Schmuckler correlation, confidence threshold → unknown, Camelot + standard names); verify with tests on synthetic A-minor and C-major chord progressions and on noise (unknown)
 - [ ] 6.5 Implement the background analysis pool (`num_cpus - 2`, min 1, below-normal priority) that analyses un-analysed or changed tracks (size/mtime differ), stores results and waveforms, and reports progress; verify with tests that a restart does not re-analyse and a replaced file is re-analysed, and on hardware that 200 tracks analysing during playback cause no overruns
 
 ## 7. Sets
