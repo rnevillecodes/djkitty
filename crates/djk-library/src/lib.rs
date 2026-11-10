@@ -16,7 +16,7 @@ use rusqlite::Connection;
 pub use import::{ImportSummary, read_tags};
 pub use schema::LATEST as SCHEMA_VERSION;
 pub use sets::{SetId, SetSummary};
-pub use tracks::{AnalysisRecord, SortKey, TrackQuery, TrackRow};
+pub use tracks::{AnalysisRecord, SortKey, TrackQuery, TrackRow, matches_search as tracks_match};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {
@@ -41,7 +41,11 @@ pub struct Library {
 }
 
 /// Platform data directory for djkitty, e.g. `%APPDATA%\djkitty\data` on Windows.
+/// The `DJKITTY_DATA_DIR` environment variable overrides it (useful for testing).
 pub fn default_data_dir() -> Result<PathBuf> {
+    if let Some(dir) = std::env::var_os("DJKITTY_DATA_DIR").filter(|d| !d.is_empty()) {
+        return Ok(PathBuf::from(dir));
+    }
     directories::ProjectDirs::from("", "", "djkitty")
         .map(|p| p.data_dir().to_path_buf())
         .ok_or(LibraryError::NoDataDir)
