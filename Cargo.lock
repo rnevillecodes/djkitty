@@ -835,6 +835,7 @@ dependencies = [
  "midir",
  "num_cpus",
  "rfd",
+ "rtrb",
  "tracing",
  "tracing-subscriber",
 ]

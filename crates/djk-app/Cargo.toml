@@ -19,6 +19,7 @@ eframe.workspace = true
 egui.workspace = true
 rfd.workspace = true
 cpal.workspace = true
+rtrb.workspace = true
 midir.workspace = true
 num_cpus.workspace = true
 directories.workspace = true

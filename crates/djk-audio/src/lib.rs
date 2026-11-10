@@ -4,5 +4,7 @@ pub mod deck;
 pub mod device;
 pub mod engine;
 pub mod mixer;
+pub mod output;
 
 pub use engine::{Engine, EngineHandles};
+pub use output::{AudioOutput, SharedEngine};

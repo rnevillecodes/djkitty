@@ -54,3 +54,79 @@ pub fn list_audio_devices() -> anyhow::Result<()> {
 pub fn midi_monitor(filter: &str) -> anyhow::Result<()> {
     djk_controller::monitor::run(filter).map_err(|e| anyhow::anyhow!("{e}"))
 }
+
+/// `--test-tone [master|headphones|silent]`: play a 440 Hz tone for 3 seconds through the
+/// selected device's master or headphone output, then report stream statistics.
+/// `silent` runs the stream at zero level, to check the device opens without sound.
+pub fn test_tone(route: &str) -> anyhow::Result<()> {
+    use djk_core::{Command, DeckId, LoadRequest, TrackBuffer};
+    use std::sync::{Arc, Mutex};
+
+    let (engine, mut handles) = djk_audio::Engine::new(48_000, 2);
+    let engine = Arc::new(Mutex::new(engine));
+    let output = djk_audio::output::open(engine.clone(), None)?;
+    println!(
+        "Opened {} — {} ch @ {} Hz, buffer {:?} frames",
+        output.device_name, output.channels, output.sample_rate, output.buffer_frames
+    );
+
+    let rate = 48_000;
+    let samples: Vec<f32> = (0..rate * 3)
+        .flat_map(|i| {
+            let v = (2.0 * std::f32::consts::PI * 440.0 * i as f32 / rate as f32).sin() * 0.25;
+            [v, v]
+        })
+        .collect();
+    let buffer = TrackBuffer {
+        samples: Arc::from(samples),
+        sample_rate: rate as u32,
+    };
+    handles
+        .load(LoadRequest {
+            deck: DeckId::A,
+            buffer,
+            token: 1,
+        })
+        .map_err(|_| anyhow::anyhow!("load queue full"))?;
+    match route {
+        "headphones" => {
+            if output.channels < 4 {
+                println!(
+                    "Device has {} channels: headphone output unavailable.",
+                    output.channels
+                );
+            }
+            handles.send(Command::SetChannelFader {
+                deck: DeckId::A,
+                value: 0.0,
+            });
+            handles.send(Command::SetHeadphoneCue {
+                deck: DeckId::A,
+                enabled: true,
+            });
+            handles.send(Command::SetHeadphoneLevel(1.0));
+        }
+        "silent" => {
+            handles.send(Command::SetMasterLevel(0.0));
+            handles.send(Command::SetHeadphoneLevel(0.0));
+        }
+        _ => {}
+    }
+    handles.send(Command::Play(DeckId::A));
+    for _ in 0..35 {
+        std::thread::sleep(std::time::Duration::from_millis(100));
+        handles.drop_retired();
+        if output.is_disconnected() {
+            println!("Device disconnected during playback (no crash).");
+            break;
+        }
+    }
+    let s = *handles.state.read();
+    println!(
+        "Rendered {} frames, output latency {:.1} ms, overruns {}",
+        s.frames_rendered,
+        s.output_latency * 1000.0,
+        s.overruns
+    );
+    Ok(())
+}
