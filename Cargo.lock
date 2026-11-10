@@ -872,6 +872,7 @@ name = "djk-library"
 version = "0.1.0"
 dependencies = [
  "directories",
+ "djk-analysis",
  "djk-core",
  "lofty",
  "rusqlite",

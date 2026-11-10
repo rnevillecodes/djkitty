@@ -34,10 +34,10 @@
 
 ## 5. Track library
 
-- [ ] 5.1 Implement the SQLite store in `djk-library` (bundled rusqlite, DB in the platform data dir, `PRAGMA user_version` migrations, tables from design §7); verify with tests that a fresh DB migrates and a reopened DB keeps its data
-- [ ] 5.2 Implement folder import: recursive walk, supported-extension filter, tag reading via lofty with filename fallback, path-unique insert so re-imports add only new files, and an import summary (added/skipped); verify with tests on a temp folder tree covering the `track-library` import, unsupported-file, re-import and untagged-file scenarios
-- [ ] 5.3 Implement library queries: list with title/artist/BPM/key/duration, sort by each column (unknown BPM last), and case-insensitive search on title/artist; verify with tests for the search and sort scenarios
-- [ ] 5.4 Implement missing-file detection (stat on view and at load time, `missing` flag, refusal to load); verify with a test that deletes a file and asserts the track is flagged and cannot be loaded
+- [x] 5.1 Implement the SQLite store in `djk-library` (bundled rusqlite, DB in the platform data dir, `PRAGMA user_version` migrations, tables from design §7); verify with tests that a fresh DB migrates and a reopened DB keeps its data
+- [x] 5.2 Implement folder import: recursive walk, supported-extension filter, tag reading via lofty with filename fallback, path-unique insert so re-imports add only new files, and an import summary (added/skipped); verify with tests on a temp folder tree covering the `track-library` import, unsupported-file, re-import and untagged-file scenarios
+- [x] 5.3 Implement library queries: list with title/artist/BPM/key/duration, sort by each column (unknown BPM last), and case-insensitive search on title/artist; verify with tests for the search and sort scenarios
+- [x] 5.4 Implement missing-file detection (stat on view and at load time, `missing` flag, refusal to load); verify with a test that deletes a file and asserts the track is flagged and cannot be loaded
 
 ## 6. Track analysis
 
@@ -49,7 +49,7 @@
 
 ## 7. Sets
 
-- [ ] 7.1 Implement set operations in `djk-library`: create, rename, delete (tracks remain), add track (no duplicates within a set), remove track, reorder with persisted positions, and set summary (count, total duration); verify with tests covering every `set-management` scenario including the 5:00 + 6:30 + 4:15 = 15:45 total
+- [x] 7.1 Implement set operations in `djk-library`: create, rename, delete (tracks remain), add track (no duplicates within a set), remove track, reorder with persisted positions, and set summary (count, total duration); verify with tests covering every `set-management` scenario including the 5:00 + 6:30 + 4:15 = 15:45 total
 
 ## 8. Full UI
 
