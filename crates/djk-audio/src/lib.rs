@@ -1,3 +1,8 @@
 //! Real-time audio engine: decks, mixer, limiter and cpal device output.
 
+pub mod deck;
 pub mod device;
+pub mod engine;
+pub mod mixer;
+
+pub use engine::{Engine, EngineHandles};
