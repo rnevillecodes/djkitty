@@ -65,7 +65,7 @@
 
 - [ ] 9.1 Run a 30-minute mixing session on the DDJ-FLX2: import a real folder, build a set, mix through it using only the controller with headphone cue; verify zero overruns, no crashes, LEDs always correct, and waveforms in sync throughout
 - [ ] 9.2 Run the no-controller path: unplug the DDJ-FLX2, use laptop speakers, and complete load/play/cue/pitch/fader/crossfader with mouse and keyboard; verify everything works and headphone cue shows as unavailable
-- [ ] 9.3 Update the README with build/run instructions, supported formats, the DDJ-FLX2 doc link and the v0.1 out-of-scope list; verify a fresh clone builds and runs by following it
+- [x] 9.3 Update the README with build/run instructions, supported formats, the DDJ-FLX2 doc link and the v0.1 out-of-scope list; verify a fresh clone builds and runs by following it
 
 ## Workflow follow-up
 
