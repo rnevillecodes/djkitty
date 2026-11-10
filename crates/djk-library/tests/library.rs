@@ -373,3 +373,31 @@ fn set_summary_totals_duration() {
     assert_eq!(s.track_count, 3);
     assert_eq!(s.total_secs, 945.0); // 15:45
 }
+
+#[test]
+fn imports_dropped_files_and_folders() {
+    let tmp = tempfile::tempdir().unwrap();
+    let a = tmp.path().join("drop/a.mp3");
+    let notes = tmp.path().join("drop/notes.txt");
+    let folder = tmp.path().join("drop/album");
+    copy("tone.mp3", &a);
+    fs::write(&notes, "hi").unwrap();
+    copy("tone.flac", &folder.join("1.flac"));
+    copy("tone.wav", &folder.join("2.wav"));
+    let mut lib = library(tmp.path());
+
+    let s = lib
+        .import_paths(
+            &[a.clone(), notes.clone(), folder.clone(), a.clone()],
+            |_| {},
+        )
+        .unwrap();
+    assert_eq!((s.added, s.ignored), (3, 1));
+    assert_eq!(s.tracks.len(), 3, "duplicate drop counted once");
+    assert_eq!(lib.track(s.tracks[0]).unwrap().path, a);
+
+    // Dropping again: nothing new, but the ids are still reported (for add-to-set).
+    let again = lib.import_paths(&[folder], |_| {}).unwrap();
+    assert_eq!((again.added, again.existing), (0, 2));
+    assert_eq!(again.tracks, s.tracks[1..].to_vec());
+}

@@ -1,13 +1,15 @@
-//! Folder import: walk, filter, read tags, insert new tracks.
+//! Import: walk files and folders, filter, read tags, insert new tracks.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
+
+use djk_core::TrackId;
 
 use lofty::prelude::*;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 
 use crate::{Library, Result, file_stamp};
 
-/// Outcome of importing a folder.
+/// Outcome of an import.
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct ImportSummary {
     /// New tracks added to the library.
@@ -18,6 +20,9 @@ pub struct ImportSummary {
     pub skipped: usize,
     /// Files without a supported extension (ignored).
     pub ignored: usize,
+    /// Every imported track, new or already in the library, in import order (no
+    /// duplicates). Used e.g. to add dropped files to a set.
+    pub tracks: Vec<TrackId>,
 }
 
 /// Title and artist from embedded tags, falling back to the file name.
@@ -49,23 +54,36 @@ impl Library {
     pub fn import_folder(
         &mut self,
         dir: &Path,
+        progress: impl FnMut(usize),
+    ) -> Result<ImportSummary> {
+        self.import_paths(&[dir.to_path_buf()], progress)
+    }
+
+    /// Import a mix of files and folders (folders recursively), e.g. from drag and drop.
+    /// Files already in the library (same path) are left unchanged. `progress` is called
+    /// with the number of files examined so far.
+    pub fn import_paths(
+        &mut self,
+        paths: &[PathBuf],
         mut progress: impl FnMut(usize),
     ) -> Result<ImportSummary> {
         let mut summary = ImportSummary::default();
         let tx = self.conn.transaction()?;
         {
-            let mut exists = tx.prepare("SELECT 1 FROM tracks WHERE path = ?1")?;
+            let mut existing_id = tx.prepare("SELECT id FROM tracks WHERE path = ?1")?;
             let mut insert = tx.prepare(
                 "INSERT INTO tracks (path, title, artist, size, mtime) VALUES (?1, ?2, ?3, ?4, ?5)",
             )?;
             let mut seen = 0usize;
-            for entry in walkdir::WalkDir::new(dir)
-                .follow_links(true)
-                .sort_by_file_name()
-                .into_iter()
-                .filter_map(|e| e.ok())
-                .filter(|e| e.file_type().is_file())
-            {
+            let entries = paths.iter().flat_map(|p| {
+                walkdir::WalkDir::new(p)
+                    .follow_links(true)
+                    .sort_by_file_name()
+                    .into_iter()
+                    .filter_map(|e| e.ok())
+                    .filter(|e| e.file_type().is_file())
+            });
+            for entry in entries {
                 seen += 1;
                 progress(seen);
                 let path = entry.path();
@@ -74,8 +92,15 @@ impl Library {
                     continue;
                 }
                 let path_str = path.to_string_lossy();
-                if exists.exists([path_str.as_ref()])? {
-                    summary.existing += 1;
+                if let Some(id) = existing_id
+                    .query_row([path_str.as_ref()], |r| r.get::<_, i64>(0))
+                    .optional()?
+                {
+                    let id = TrackId(id);
+                    if !summary.tracks.contains(&id) {
+                        summary.existing += 1;
+                        summary.tracks.push(id);
+                    }
                     continue;
                 }
                 if djk_analysis::probe_file(path).is_err() {
@@ -87,6 +112,7 @@ impl Library {
                 let (size, mtime) = file_stamp(path)?;
                 insert.execute(params![path_str.as_ref(), title, artist, size, mtime])?;
                 summary.added += 1;
+                summary.tracks.push(TrackId(tx.last_insert_rowid()));
             }
         }
         tx.commit()?;
