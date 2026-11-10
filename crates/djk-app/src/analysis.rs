@@ -1,6 +1,5 @@
 //! Background analysis pool: analyses new or changed tracks on low-priority worker
 //! threads and stores results and waveforms in the library.
-#![allow(dead_code)] // Wired into the UI in the full-layout step.
 
 use std::collections::{HashSet, VecDeque};
 use std::path::{Path, PathBuf};
@@ -37,7 +36,6 @@ struct Shared {
 
 pub struct AnalysisPool {
     shared: Arc<Shared>,
-    db_dir: PathBuf,
     events: Receiver<AnalysisEvent>,
     workers: Vec<std::thread::JoinHandle<()>>,
 }
@@ -73,7 +71,6 @@ impl AnalysisPool {
             .collect();
         Self {
             shared,
-            db_dir: db_dir.to_path_buf(),
             events: rx,
             workers: handles,
         }
@@ -123,10 +120,6 @@ impl AnalysisPool {
 
     pub fn try_event(&self) -> Option<AnalysisEvent> {
         self.events.try_recv().ok()
-    }
-
-    pub fn db_dir(&self) -> &Path {
-        &self.db_dir
     }
 }
 

@@ -53,7 +53,7 @@
 
 ## 8. Full UI
 
-- [ ] 8.1 Build the main layout in `djk-app` (two deck panels, mixer strip, sidebar with Library/Sets, track table) with a custom dark theme and per-deck accent colours; verify by screenshot that the layout matches design §9 and works at 1280×720
+- [x] 8.1 Build the main layout in `djk-app` (two deck panels, mixer strip, sidebar with Library/Sets, track table) with a custom dark theme and per-deck accent colours; verify by screenshot that the layout matches design §9 and works at 1280×720
 - [ ] 8.2 Implement deck panels: title/artist/BPM/key, elapsed/remaining, play/pause/cue buttons, pitch slider with BPM and % readout, loading indicator, refusal message when loading onto a playing deck; verify every on-screen deck action works with no controller connected
 - [ ] 8.3 Implement the mixer strip (channel faders, crossfader, headphone cue toggles, master and headphone level, "headphone cue unavailable" on 2-channel devices) and the audio device picker with remembered choice; verify on-screen controls change the audio and the device choice survives restart
 - [ ] 8.4 Implement the library and set views: import-folder button with progress and summary, search box, sortable columns, missing-track styling, analysis progress, set create/rename/delete, add-to-set, drag or button reorder, load to deck A/B, and browse-knob selection highlight; verify each `track-library` and `set-management` UI scenario by hand

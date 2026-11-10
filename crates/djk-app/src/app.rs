@@ -1,155 +1,471 @@
-//! The main application window.
+//! The main application: state, background services and per-frame wiring.
 
-use djk_core::{Command, DeckId, LoadRequest};
+use std::path::PathBuf;
+use std::sync::Arc;
+use std::sync::mpsc::Receiver;
+use std::time::Instant;
 
+use djk_analysis::Waveform;
+use djk_analysis::waveform::{Bin, OVERVIEW_BINS};
+use djk_controller::{Action, ControllerManager, DDJ_FLX2};
+use djk_core::{DeckId, LoadRequest, TrackId};
+use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery, TrackRow};
+
+use crate::analysis::{AnalysisEvent, AnalysisPool};
 use crate::audio::AudioService;
 use crate::loader::{LoadJob, Loader};
-use crate::util::fmt_time;
+use crate::settings::Settings;
 
+/// What a deck shows about its track.
 #[derive(Default)]
-struct DeckUi {
-    title: String,
-    loading: bool,
-    message: Option<String>,
-    cue_held: bool,
+pub struct DeckUi {
+    /// Token of the track this info belongs to (matches the engine's `track_token`).
+    pub token: u64,
+    pub track: Option<TrackRow>,
+    pub waveform: Option<Arc<Waveform>>,
+    pub overview: Vec<Bin>,
+    pub loading: bool,
+    pub message: Option<(String, Instant)>,
+    pub cue_held: bool,
+}
+
+/// Which list the browser shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum View {
+    Library,
+    Set(SetId),
+}
+
+/// Import running on a background thread.
+pub struct ImportJob {
+    pub progress: Arc<std::sync::atomic::AtomicUsize>,
+    pub result: Receiver<Result<ImportSummary, String>>,
 }
 
 pub struct DjApp {
-    audio: AudioService,
-    loader: Loader,
-    decks: [DeckUi; 2],
-    next_token: u64,
+    pub audio: AudioService,
+    pub loader: Loader,
+    pub library: Option<Library>,
+    pub data_dir: PathBuf,
+    pub pool: Option<AnalysisPool>,
+    pub controller: Option<ControllerManager>,
+    pub settings: Settings,
+    pub decks: [DeckUi; 2],
+
+    pub view: View,
+    pub query: TrackQuery,
+    pub rows: Vec<TrackRow>,
+    pub rows_dirty: bool,
+    pub selected: Option<usize>,
+    pub scroll_to_selected: bool,
+    pub sets: Vec<SetSummary>,
+    pub details_overview: Option<(TrackId, Vec<Bin>)>,
+    pub renaming: Option<(SetId, String)>,
+    pub new_set_name: String,
+    pub import: Option<ImportJob>,
+    pub notice: Option<(String, Instant)>,
+    pub output_devices: Vec<String>,
+    pub start_time: Instant,
+    pub focus_search: bool,
+    pub show_shortcuts: bool,
 }
 
 impl DjApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        Self {
-            audio: AudioService::start(None),
-            loader: Loader::spawn(cc.egui_ctx.clone()),
+        crate::theme::apply(&cc.egui_ctx);
+        let data_dir = djk_library::default_data_dir().unwrap_or_else(|_| PathBuf::from("."));
+        let settings = Settings::load(&data_dir);
+        let mut audio = AudioService::start(settings.audio_device.as_deref());
+        let ctx = cc.egui_ctx.clone();
+
+        let mut library = match Library::open_in(&data_dir) {
+            Ok(l) => Some(l),
+            Err(e) => {
+                tracing::error!("cannot open library: {e}");
+                None
+            }
+        };
+        let pool = library.as_mut().map(|lib| {
+            let repaint = ctx.clone();
+            let pool = AnalysisPool::start(&data_dir, crate::analysis::worker_count(), move || {
+                repaint.request_repaint()
+            });
+            pool.rescan(lib);
+            pool
+        });
+        let controller = audio.handles.controller.take().map(|queue| {
+            let repaint = ctx.clone();
+            ControllerManager::start(&DDJ_FLX2, queue, move || repaint.request_repaint())
+        });
+
+        let mut app = Self {
+            audio,
+            loader: Loader::spawn(ctx),
+            library,
+            data_dir,
+            pool,
+            controller,
+            settings,
             decks: Default::default(),
-            next_token: 1,
+            view: View::Library,
+            query: TrackQuery::default(),
+            rows: Vec::new(),
+            rows_dirty: true,
+            selected: None,
+            scroll_to_selected: false,
+            sets: Vec::new(),
+            details_overview: None,
+            renaming: None,
+            new_set_name: String::new(),
+            import: None,
+            notice: None,
+            output_devices: Vec::new(),
+            start_time: Instant::now(),
+            focus_search: false,
+            show_shortcuts: false,
+        };
+        app.refresh_devices();
+        app.reload_sets();
+        app
+    }
+
+    pub fn notify(&mut self, msg: impl Into<String>) {
+        self.notice = Some((msg.into(), Instant::now()));
+    }
+
+    pub fn deck_message(&mut self, deck: DeckId, msg: impl Into<String>) {
+        self.decks[deck.index()].message = Some((msg.into(), Instant::now()));
+    }
+
+    pub fn refresh_devices(&mut self) {
+        self.output_devices = djk_audio::device::list_output_devices()
+            .map(|d| d.into_iter().map(|d| d.name).collect())
+            .unwrap_or_default();
+    }
+
+    pub fn select_device(&mut self, name: Option<String>) {
+        self.audio.switch_device(name.as_deref());
+        self.settings.audio_device = name;
+        self.settings.save();
+    }
+
+    pub fn selected_row(&self) -> Option<&TrackRow> {
+        self.selected.and_then(|i| self.rows.get(i))
+    }
+
+    // ---- Library and sets ----
+
+    pub fn reload_rows(&mut self) {
+        self.rows_dirty = false;
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        let selected_id = self.selected.and_then(|i| self.rows.get(i)).map(|r| r.id);
+        let rows = match self.view {
+            View::Library => lib.tracks(&self.query),
+            View::Set(set) => lib.set_tracks(set).map(|mut rows| {
+                let needle = self.query.search.trim().to_lowercase();
+                rows.retain(|r| djk_library::tracks_match(r, &needle));
+                rows
+            }),
+        };
+        match rows {
+            Ok(mut rows) => {
+                // Cheap missing-file check of the rows being shown.
+                let ids: Vec<TrackId> = rows.iter().map(|r| r.id).collect();
+                let changed = lib.refresh_missing(&ids).unwrap_or_default();
+                for r in rows.iter_mut().filter(|r| changed.contains(&r.id)) {
+                    r.missing = !r.missing;
+                }
+                self.rows = rows;
+            }
+            Err(e) => self.notify(format!("Library error: {e}")),
+        }
+        self.selected = selected_id
+            .and_then(|id| self.rows.iter().position(|r| r.id == id))
+            .or(if self.rows.is_empty() { None } else { Some(0) });
+    }
+
+    pub fn reload_sets(&mut self) {
+        if let Some(lib) = &self.library {
+            self.sets = lib.sets().unwrap_or_default();
+            if let View::Set(id) = self.view
+                && !self.sets.iter().any(|s| s.id == id)
+            {
+                self.view = View::Library;
+                self.rows_dirty = true;
+            }
         }
     }
 
-    fn request_load(&mut self, deck: DeckId, path: std::path::PathBuf) {
-        if self.audio.state.deck(deck).playing {
-            self.decks[deck.index()].message = Some("Deck is playing — pause it first".into());
+    pub fn set_view(&mut self, view: View) {
+        if self.view != view {
+            self.view = view;
+            self.selected = None;
+            self.rows_dirty = true;
+        }
+    }
+
+    pub fn set_sort(&mut self, key: SortKey) {
+        if self.query.sort == key {
+            self.query.descending = !self.query.descending;
+        } else {
+            self.query.sort = key;
+            self.query.descending = false;
+        }
+        self.rows_dirty = true;
+    }
+
+    /// Run a library operation and report errors as a notice.
+    pub fn with_library(&mut self, f: impl FnOnce(&mut Library) -> djk_library::Result<()>) {
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        if let Err(e) = f(lib) {
+            self.notify(format!("Library error: {e}"));
+        }
+        self.reload_sets();
+        self.rows_dirty = true;
+    }
+
+    pub fn start_import(&mut self, folder: PathBuf, ctx: &egui::Context) {
+        if self.import.is_some() {
             return;
         }
-        let token = self.next_token;
-        self.next_token += 1;
-        self.decks[deck.index()].loading = true;
-        self.decks[deck.index()].message = None;
-        self.loader.request(LoadJob { deck, path, token });
+        let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let dir = self.data_dir.clone();
+        let p = progress.clone();
+        let ctx = ctx.clone();
+        std::thread::Builder::new()
+            .name("djk-import".into())
+            .spawn(move || {
+                let result = Library::open_in(&dir)
+                    .and_then(|mut lib| {
+                        lib.import_folder(&folder, |n| {
+                            p.store(n, std::sync::atomic::Ordering::Relaxed);
+                            if n % 25 == 0 {
+                                ctx.request_repaint();
+                            }
+                        })
+                    })
+                    .map_err(|e| e.to_string());
+                let _ = tx.send(result);
+                ctx.request_repaint();
+            })
+            .expect("spawn import thread");
+        self.import = Some(ImportJob {
+            progress,
+            result: rx,
+        });
+    }
+
+    fn poll_import(&mut self) {
+        let Some(job) = &self.import else { return };
+        let Ok(result) = job.result.try_recv() else {
+            return;
+        };
+        self.import = None;
+        match result {
+            Ok(s) => {
+                let mut msg = format!("Import finished: {} added", s.added);
+                if s.existing > 0 {
+                    msg += &format!(", {} already in library", s.existing);
+                }
+                if s.skipped > 0 {
+                    msg += &format!(", {} skipped (unreadable)", s.skipped);
+                }
+                self.notify(msg);
+                if let (Some(pool), Some(lib)) = (&self.pool, self.library.as_mut()) {
+                    pool.rescan(lib);
+                }
+            }
+            Err(e) => self.notify(format!("Import failed: {e}")),
+        }
+        self.rows_dirty = true;
+    }
+
+    fn poll_analysis(&mut self) {
+        let Some(pool) = &self.pool else { return };
+        let mut changed = Vec::new();
+        let mut removed = 0;
+        while let Some(ev) = pool.try_event() {
+            match ev {
+                AnalysisEvent::Analysed(id) => changed.push(id),
+                AnalysisEvent::Removed(id, _) => {
+                    changed.push(id);
+                    removed += 1;
+                }
+            }
+        }
+        if changed.is_empty() {
+            return;
+        }
+        if removed > 0 {
+            self.notify(format!(
+                "{removed} unreadable file(s) skipped and removed from the library"
+            ));
+        }
+        self.rows_dirty = true;
+        self.reload_sets();
+        // Refresh deck info for analysed tracks (BPM/key appear when ready).
+        if let Some(lib) = &self.library {
+            for d in &mut self.decks {
+                if let Some(t) = &d.track
+                    && changed.contains(&t.id)
+                    && let Ok(row) = lib.track(t.id)
+                {
+                    d.track = Some(row);
+                }
+            }
+        }
+        if self
+            .details_overview
+            .as_ref()
+            .is_some_and(|(id, _)| changed.contains(id))
+        {
+            self.details_overview = None;
+        }
+    }
+
+    // ---- Loading ----
+
+    /// Load a library track onto a deck (refused if the deck is playing or the file is
+    /// missing).
+    pub fn load_track(&mut self, deck: DeckId, id: TrackId) {
+        if self.audio.state.deck(deck).playing {
+            self.deck_message(deck, "Deck is playing — pause it before loading");
+            return;
+        }
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        let path = match lib.loadable_path(id) {
+            Ok(p) => p,
+            Err(djk_library::LibraryError::Missing(_)) => {
+                self.rows_dirty = true;
+                self.deck_message(deck, "File is missing — cannot load");
+                return;
+            }
+            Err(e) => {
+                self.deck_message(deck, format!("Cannot load: {e}"));
+                return;
+            }
+        };
+        let track = lib.track(id).ok();
+        let cache = lib.waveform_path(id);
+        let ui = &mut self.decks[deck.index()];
+        ui.loading = true;
+        ui.message = None;
+        ui.token = id.0 as u64;
+        ui.track = track;
+        self.loader.request(LoadJob {
+            deck,
+            path,
+            token: id.0 as u64,
+            waveform_cache: cache.is_file().then_some(cache),
+        });
+    }
+
+    pub fn load_selected(&mut self, deck: DeckId) {
+        if let Some(id) = self.selected_row().map(|r| r.id) {
+            self.load_track(deck, id);
+        }
     }
 
     fn receive_loads(&mut self) {
         while let Some(done) = self.loader.try_recv() {
-            let ui = &mut self.decks[done.deck.index()];
-            ui.loading = false;
+            let deck = done.deck;
+            if self.decks[deck.index()].token != done.token {
+                continue; // superseded by a later load request
+            }
+            self.decks[deck.index()].loading = false;
             match done.result {
-                Ok(decoded) => {
-                    if self.audio.state.deck(done.deck).playing {
-                        ui.message = Some("Deck is playing — pause it first".into());
+                Ok((decoded, waveform)) => {
+                    if self.audio.state.deck(deck).playing {
+                        self.deck_message(deck, "Deck is playing — pause it before loading");
                         continue;
                     }
-                    ui.title = done
-                        .path
-                        .file_stem()
-                        .map(|s| s.to_string_lossy().into_owned())
-                        .unwrap_or_default();
-                    self.audio.load(LoadRequest {
-                        deck: done.deck,
+                    let ui = &mut self.decks[deck.index()];
+                    ui.overview = waveform.overview(OVERVIEW_BINS);
+                    ui.waveform = Some(Arc::new(waveform));
+                    if !self.audio.load(LoadRequest {
+                        deck,
                         buffer: decoded.buffer,
                         token: done.token,
-                    });
+                    }) {
+                        self.deck_message(deck, "Engine busy — try again");
+                    }
                 }
-                Err(e) => ui.message = Some(format!("Could not load: {e}")),
+                Err(e) => self.deck_message(deck, format!("Could not load: {e}")),
             }
         }
     }
 
-    fn deck_panel(&mut self, ui: &mut egui::Ui, deck: DeckId) {
-        let s = *self.audio.state.deck(deck);
-        ui.heading(format!("Deck {}", deck.label()));
-        let d = &self.decks[deck.index()];
-        if d.loading {
-            ui.label("Loading…");
-        } else if s.loaded {
-            ui.label(&d.title);
-        } else {
-            ui.weak("No track loaded");
+    // ---- Controller ----
+
+    fn poll_controller(&mut self) {
+        let mut actions = Vec::new();
+        let mut events = Vec::new();
+        if let Some(c) = self.controller.as_mut() {
+            events = c.poll_events();
+            while let Some(a) = c.try_action() {
+                actions.push(a);
+            }
         }
-        if let Some(msg) = &d.message {
-            ui.colored_label(egui::Color32::from_rgb(240, 160, 60), msg);
+        for ev in events {
+            match ev {
+                djk_controller::ControllerEvent::Connected(name) => {
+                    self.notify(format!("Controller connected: {name}"));
+                }
+                djk_controller::ControllerEvent::Disconnected => {
+                    self.notify("Controller disconnected");
+                }
+            }
         }
-        ui.label(format!(
-            "{}   -{}",
-            fmt_time(s.position_secs()),
-            fmt_time(s.remaining_secs())
-        ));
-        ui.horizontal(|ui| {
-            if ui.button("Open…").clicked()
-                && let Some(path) = rfd::FileDialog::new()
-                    .add_filter("Audio", djk_analysis::decode::SUPPORTED_EXTENSIONS)
-                    .pick_file()
-            {
-                self.request_load(deck, path);
+        for a in actions {
+            match a {
+                Action::Browse(delta) => self.move_selection(delta),
+                Action::LoadSelected(deck) => self.load_selected(deck),
+                Action::Engine(_) => {}
             }
-            let play_label = if s.playing { "Pause" } else { "Play" };
-            if ui.button(play_label).clicked() {
-                self.audio.send(Command::TogglePlay(deck));
-            }
-            let cue = ui.button("Cue");
-            let down = cue.is_pointer_button_down_on();
-            let held = &mut self.decks[deck.index()].cue_held;
-            if down && !*held {
-                *held = true;
-                self.audio.send(Command::CuePress(deck));
-            } else if !down && *held {
-                *held = false;
-                self.audio.send(Command::CueRelease(deck));
-            }
-        });
+        }
+        let time = self.start_time.elapsed().as_secs_f64();
+        let state = self.audio.state;
+        if let Some(c) = self.controller.as_mut() {
+            c.update_leds(&state, time);
+        }
     }
 
-    fn status_bar(&mut self, ui: &mut egui::Ui) {
-        let s = self.audio.state;
-        let mut reconnect = false;
-        ui.horizontal(|ui| {
-            match (&self.audio.output, &self.audio.error) {
-                (Some(out), _) if !out.is_disconnected() => {
-                    ui.label(format!(
-                        "Audio: {} · {} ch @ {} Hz",
-                        out.device_name, out.channels, out.sample_rate
-                    ));
-                }
-                (Some(_), _) => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, "Audio device lost");
-                }
-                (None, Some(err)) => {
-                    ui.colored_label(egui::Color32::LIGHT_RED, format!("No audio: {err}"));
-                }
-                (None, None) => {
-                    ui.label("No audio");
-                }
-            }
-            if self.audio.is_disconnected() && ui.button("Reconnect").clicked() {
-                reconnect = true;
-            }
-            ui.separator();
-            let latency_ms = s.output_latency * 1000.0;
-            let colour = if latency_ms <= 20.0 {
-                ui.visuals().text_color()
-            } else {
-                egui::Color32::from_rgb(240, 160, 60)
-            };
-            ui.colored_label(colour, format!("Latency {latency_ms:.1} ms"));
-            ui.separator();
-            ui.label(format!("Overruns {}", s.overruns));
-        });
-        if reconnect {
-            self.audio.switch_device(None);
+    pub fn move_selection(&mut self, delta: i32) {
+        if self.rows.is_empty() {
+            self.selected = None;
+            return;
+        }
+        let cur = self.selected.unwrap_or(0) as i64;
+        let next = (cur + i64::from(delta)).clamp(0, self.rows.len() as i64 - 1) as usize;
+        self.selected = Some(next);
+        self.scroll_to_selected = true;
+    }
+
+    /// Tell soft takeover that the UI changed a fader.
+    pub fn ui_fader(&self, target: djk_controller::FaderTarget, value: f32) {
+        if let Some(c) = &self.controller {
+            c.values.set_from_ui(target, value);
+        }
+    }
+
+    fn update_details(&mut self) {
+        let Some(id) = self.selected_row().map(|r| r.id) else {
+            return;
+        };
+        if self.details_overview.as_ref().is_none_or(|(d, _)| *d != id)
+            && let Some(lib) = &self.library
+        {
+            let bins = Waveform::load(&lib.waveform_path(id))
+                .map(|w| w.overview(400))
+                .unwrap_or_default();
+            self.details_overview = Some((id, bins));
         }
     }
 }
@@ -158,21 +474,28 @@ impl eframe::App for DjApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.audio.poll();
         self.receive_loads();
+        self.poll_import();
+        self.poll_analysis();
+        self.poll_controller();
+        if self.rows_dirty {
+            self.reload_rows();
+        }
+        self.update_details();
+
         let playing = self.audio.state.decks.iter().any(|d| d.playing);
+        let busy = self.import.is_some() || self.pool.as_ref().is_some_and(|p| p.is_busy());
         if playing {
             ctx.request_repaint();
+        } else if busy {
+            ctx.request_repaint_after(std::time::Duration::from_millis(200));
         } else {
+            // Keeps LEDs blinking and the device status fresh.
             ctx.request_repaint_after(std::time::Duration::from_millis(250));
         }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        egui::Panel::bottom("status").show(ui, |ui| self.status_bar(ui));
-        egui::CentralPanel::default().show(ui, |ui| {
-            ui.columns(2, |cols| {
-                self.deck_panel(&mut cols[0], DeckId::A);
-                self.deck_panel(&mut cols[1], DeckId::B);
-            });
-        });
+        crate::shortcuts::handle(self, ui.ctx());
+        crate::ui::layout(self, ui);
     }
 }

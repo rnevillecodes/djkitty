@@ -1,22 +1,23 @@
-//! Background track loader: decodes files off the UI thread.
+//! Background track loader: decodes files and prepares waveforms off the UI thread.
 
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
-use djk_analysis::Decoded;
+use djk_analysis::{Decoded, Waveform};
 use djk_core::DeckId;
 
 pub struct LoadJob {
     pub deck: DeckId,
     pub path: PathBuf,
     pub token: u64,
+    /// Waveform cache file to read, if the track was analysed.
+    pub waveform_cache: Option<PathBuf>,
 }
 
 pub struct Loaded {
     pub deck: DeckId,
     pub token: u64,
-    pub path: PathBuf,
-    pub result: Result<Decoded, String>,
+    pub result: Result<(Decoded, Waveform), String>,
 }
 
 pub struct Loader {
@@ -32,11 +33,24 @@ impl Loader {
             .name("djk-loader".into())
             .spawn(move || {
                 for job in job_rx {
-                    let result = djk_analysis::decode_file(&job.path).map_err(|e| e.to_string());
+                    let result = djk_analysis::decode_file(&job.path)
+                        .map(|decoded| {
+                            let waveform = job
+                                .waveform_cache
+                                .as_deref()
+                                .and_then(|p| Waveform::load(p).ok())
+                                .unwrap_or_else(|| {
+                                    Waveform::from_audio(
+                                        &decoded.buffer.samples,
+                                        decoded.buffer.sample_rate,
+                                    )
+                                });
+                            (decoded, waveform)
+                        })
+                        .map_err(|e| e.to_string());
                     let done = Loaded {
                         deck: job.deck,
                         token: job.token,
-                        path: job.path,
                         result,
                     };
                     if res_tx.send(done).is_err() {

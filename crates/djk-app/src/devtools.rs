@@ -130,3 +130,26 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
     );
     Ok(())
 }
+
+/// `--import-folder <path>`: import a folder into the library without the UI, then analyse
+/// everything that needs it. Honours `DJKITTY_DATA_DIR`.
+pub fn import_folder(folder: &std::path::Path) -> anyhow::Result<()> {
+    let dir = djk_library::default_data_dir()?;
+    let mut lib = djk_library::Library::open_in(&dir)?;
+    let s = lib.import_folder(folder, |_| {})?;
+    println!(
+        "Imported into {}: {} added, {} existing, {} skipped, {} ignored",
+        dir.display(),
+        s.added,
+        s.existing,
+        s.skipped,
+        s.ignored
+    );
+    let pool = crate::analysis::AnalysisPool::start(&dir, crate::analysis::worker_count(), || {});
+    let queued = pool.rescan(&mut lib);
+    while pool.is_busy() {
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    println!("Analysed {queued} track(s)");
+    Ok(())
+}

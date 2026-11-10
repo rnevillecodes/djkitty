@@ -7,7 +7,12 @@ mod app;
 mod audio;
 mod devtools;
 mod loader;
+mod settings;
+mod shortcuts;
+mod theme;
+mod ui;
 mod util;
+mod waveview;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -17,6 +22,12 @@ fn main() -> anyhow::Result<()> {
     if let Some(i) = args.iter().position(|a| a == "--test-tone") {
         let route = args.get(i + 1).map(String::as_str).unwrap_or("master");
         return devtools::test_tone(route);
+    }
+    if let Some(i) = args.iter().position(|a| a == "--import-folder") {
+        let folder = args
+            .get(i + 1)
+            .ok_or_else(|| anyhow::anyhow!("--import-folder needs a folder path"))?;
+        return devtools::import_folder(std::path::Path::new(folder));
     }
     if let Some(i) = args.iter().position(|a| a == "--midi-monitor") {
         let filter = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned();
