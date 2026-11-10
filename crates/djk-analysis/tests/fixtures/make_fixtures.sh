@@ -10,5 +10,6 @@ ffmpeg -y -loglevel error $SRC -ac 2 -c:a pcm_s16le tone.wav
 ffmpeg -y -loglevel error $SRC -ac 2 -c:a pcm_s16be tone.aiff
 ffmpeg -y -loglevel error $SRC -ac 2 -c:a aac -b:a 96k tone.m4a
 ffmpeg -y -loglevel error $SRC -ac 1 -c:a pcm_s16le mono.wav
+ffmpeg -y -loglevel error $SRC -ac 2 -c:a libmp3lame -b:a 128k -metadata title="Sunrise Groove" -metadata artist="Ólafur Example" tagged.mp3
 # A file with a supported extension that is not audio.
 printf 'this is not an mp3 file at all, just text pretending to be one.\n%.0s' 1 2 3 4 5 6 7 8 > corrupt.mp3

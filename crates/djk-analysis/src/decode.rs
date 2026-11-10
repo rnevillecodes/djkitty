@@ -158,6 +158,52 @@ pub fn decode_file(path: &Path) -> Result<Decoded, DecodeError> {
     })
 }
 
+/// Quickly check that a file can be decoded: probe the format and decode the first
+/// audio packet. Much cheaper than [`decode_file`].
+pub fn probe_file(path: &Path) -> Result<(), DecodeError> {
+    let file = File::open(path)?;
+    let mss = MediaSourceStream::new(Box::new(file), Default::default());
+    let mut hint = Hint::new();
+    if let Some(ext) = path.extension().and_then(|e| e.to_str()) {
+        hint.with_extension(ext);
+    }
+    let mut format = symphonia::default::get_probe()
+        .probe(
+            &hint,
+            mss,
+            FormatOptions::default(),
+            MetadataOptions::default(),
+        )
+        .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
+    let track = format
+        .default_track(TrackType::Audio)
+        .ok_or(DecodeError::NoAudioTrack)?;
+    let track_id = track.id;
+    let params = track
+        .codec_params
+        .as_ref()
+        .and_then(|p| p.audio())
+        .ok_or(DecodeError::NoAudioTrack)?
+        .clone();
+    let mut decoder = symphonia::default::get_codecs()
+        .make_audio_decoder(&params, &AudioDecoderOptions::default())
+        .map_err(|e| DecodeError::Unsupported(e.to_string()))?;
+    for _ in 0..32 {
+        let packet = match format.next_packet() {
+            Ok(Some(p)) => p,
+            Ok(None) => return Err(DecodeError::Empty),
+            Err(e) => return Err(DecodeError::Decode(e.to_string())),
+        };
+        if packet.track_id != track_id {
+            continue;
+        }
+        if decoder.decode(&packet).is_ok() {
+            return Ok(());
+        }
+    }
+    Err(DecodeError::Decode("no decodable packets".into()))
+}
+
 /// Append interleaved `ch`-channel samples to `out` as interleaved stereo.
 fn append_stereo(out: &mut Vec<f32>, block: &[f32], ch: usize) {
     match ch {
