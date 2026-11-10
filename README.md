@@ -7,7 +7,8 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 
 ## What v0.1 does
 
-- **Library:** import a music folder (recursively), search, and sort by title, artist,
+- **Library:** import a music folder (recursively) or **drag and drop files and folders**
+  onto the window (dropping while a set is open also adds them to that set); search, and sort by title, artist,
   BPM, key or duration. Missing files are flagged.
 - **Analysis in the background:** duration, format, sample rate, channels, bitrate,
   **BPM**, **key** (Camelot and standard notation) and a **3-band waveform** for every
@@ -56,6 +57,9 @@ cargo run -p djk-app -- --list-audio-devices
 ```
 
 ## Keyboard shortcuts
+
+**Ctrl+click** (or double-click) any slider or fader to reset it to its default: pitch 0%,
+crossfader centre, faders and master up.
 
 Shortcuts are ignored while you're typing in a text field. Click **Shortcuts** in the
 status bar to see this list in the app.

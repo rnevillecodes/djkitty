@@ -3,7 +3,7 @@
 use std::time::{Duration, Instant};
 
 use djk_controller::FaderTarget;
-use djk_core::{Bpm, Command, DeckId, DeckState, EngineState, PITCH_RANGE};
+use djk_core::{Bpm, Command, DeckId, DeckState, EngineState, MixerState, PITCH_RANGE};
 use djk_library::SortKey;
 use egui::{Align, Color32, Layout, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
@@ -281,16 +281,12 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
                         .show_value(false)
                         .text("Pitch"),
                 );
-                if resp.changed() {
-                    let pitch = pitch_pct / 100.0;
+                if let Some(pct) = slider_value(ui, &resp, pitch_pct, 0.0) {
+                    let pitch = pct / 100.0;
                     app.audio.send(Command::SetPitch { deck, pitch });
                     app.ui_fader(FaderTarget::Pitch(deck), pitch);
                 }
-                if resp.double_clicked() {
-                    app.audio.send(Command::SetPitch { deck, pitch: 0.0 });
-                    app.ui_fader(FaderTarget::Pitch(deck), 0.0);
-                }
-                resp.on_hover_text("Double-click to reset");
+                resp.on_hover_text(RESET_HINT);
                 ui.label(
                     RichText::new(format!("{:+.1}%", s.pitch * 100.0))
                         .monospace()
@@ -303,6 +299,22 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
             });
         });
     });
+}
+
+const RESET_HINT: &str = "Ctrl+click or double-click to reset";
+
+/// Interpret a slider response: Ctrl+click (Cmd+click on macOS) or double-click resets to
+/// `default`; otherwise a changed value is returned as is.
+fn slider_value(ui: &Ui, resp: &egui::Response, value: f32, default: f32) -> Option<f32> {
+    let reset_modifier = ui.input(|i| i.modifiers.command);
+    let touched = resp.clicked() || resp.drag_started() || resp.changed();
+    if (reset_modifier && touched) || resp.double_clicked() {
+        Some(default)
+    } else if resp.changed() {
+        Some(value)
+    } else {
+        None
+    }
 }
 
 fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
@@ -354,10 +366,12 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                             .vertical()
                             .show_value(false),
                     );
-                    if resp.changed() {
+                    let default = MixerState::default().channel_fader[deck.index()];
+                    if let Some(v) = slider_value(ui, &resp, v, default) {
                         app.audio.send(Command::SetChannelFader { deck, value: v });
                         app.ui_fader(FaderTarget::Channel(deck), v);
                     }
+                    resp.on_hover_text(RESET_HINT);
                     ui.label(
                         RichText::new(deck.label())
                             .color(theme::deck_colour(deck))
@@ -373,15 +387,11 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             let mut x = m.crossfader;
             ui.spacing_mut().slider_width = MIXER_WIDTH - 40.0;
             let resp = ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false));
-            if resp.changed() {
+            if let Some(x) = slider_value(ui, &resp, x, MixerState::default().crossfader) {
                 app.audio.send(Command::SetCrossfader(x));
                 app.ui_fader(FaderTarget::Crossfader, x);
             }
-            if resp.double_clicked() {
-                app.audio.send(Command::SetCrossfader(0.5));
-                app.ui_fader(FaderTarget::Crossfader, 0.5);
-            }
-            resp.on_hover_text("Crossfader (double-click to centre)");
+            resp.on_hover_text(format!("Crossfader · {RESET_HINT}"));
             ui.label(
                 RichText::new("A  ·  crossfader  ·  B")
                     .small()
@@ -397,25 +407,24 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             .show(ui, |ui| {
                 ui.spacing_mut().slider_width = 120.0;
                 ui.label("Master");
+                let defaults = MixerState::default();
                 let mut v = m.master_level;
-                if ui
-                    .add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false))
-                    .changed()
-                {
+                let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
+                if let Some(v) = slider_value(ui, &resp, v, defaults.master_level) {
                     app.audio.send(Command::SetMasterLevel(v));
                 }
+                resp.on_hover_text(RESET_HINT);
                 ui.end_row();
                 ui.label("Phones");
                 let mut v = m.headphone_level;
-                if ui
-                    .add_enabled(
-                        state.headphones_available(),
-                        egui::Slider::new(&mut v, 0.0..=1.0).show_value(false),
-                    )
-                    .changed()
-                {
+                let resp = ui.add_enabled(
+                    state.headphones_available(),
+                    egui::Slider::new(&mut v, 0.0..=1.0).show_value(false),
+                );
+                if let Some(v) = slider_value(ui, &resp, v, defaults.headphone_level) {
                     app.audio.send(Command::SetHeadphoneLevel(v));
                 }
+                resp.on_hover_text(RESET_HINT);
                 ui.end_row();
             });
         if !state.headphones_available() {
@@ -681,7 +690,7 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
                         && let Some(folder) = rfd::FileDialog::new().pick_folder()
                     {
                         let ctx = ui.ctx().clone();
-                        app.start_import(folder, &ctx);
+                        app.start_import(vec![folder], None, &ctx);
                     }
                 }
             }
@@ -1102,4 +1111,43 @@ fn shortcuts_window(app: &mut DjApp, ctx: &egui::Context) {
             }
         });
     app.show_shortcuts = open;
+}
+
+/// Full-window hint shown while files are dragged over the app.
+pub fn drop_overlay(app: &DjApp, ctx: &egui::Context) {
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("drop-overlay"),
+    ));
+    let rect = ctx.content_rect().shrink(12.0);
+    painter.rect_filled(rect, 12.0, Color32::from_black_alpha(190));
+    painter.rect_stroke(
+        rect,
+        12.0,
+        egui::Stroke::new(2.0, theme::DECK_A),
+        egui::StrokeKind::Inside,
+    );
+    let target = match app.view {
+        View::Set(id) => app
+            .sets
+            .iter()
+            .find(|s| s.id == id)
+            .map(|s| format!("Drop to import and add to “{}”", s.name)),
+        View::Library => None,
+    }
+    .unwrap_or_else(|| "Drop to import into your library".to_owned());
+    painter.text(
+        rect.center() - egui::vec2(0.0, 12.0),
+        egui::Align2::CENTER_CENTER,
+        target,
+        egui::FontId::proportional(24.0),
+        theme::TEXT,
+    );
+    painter.text(
+        rect.center() + egui::vec2(0.0, 20.0),
+        egui::Align2::CENTER_CENTER,
+        "Audio files or whole folders · MP3, FLAC, WAV, AIFF, M4A",
+        egui::FontId::proportional(14.0),
+        theme::TEXT_DIM,
+    );
 }

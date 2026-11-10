@@ -39,7 +39,8 @@ pub enum View {
 /// Import running on a background thread.
 pub struct ImportJob {
     pub progress: Arc<std::sync::atomic::AtomicUsize>,
-    pub result: Receiver<Result<ImportSummary, String>>,
+    /// Summary, plus how many tracks were appended to the target set (if any).
+    pub result: Receiver<Result<(ImportSummary, Option<usize>), String>>,
 }
 
 pub struct DjApp {
@@ -228,8 +229,16 @@ impl DjApp {
         self.rows_dirty = true;
     }
 
-    pub fn start_import(&mut self, folder: PathBuf, ctx: &egui::Context) {
+    /// Import files and/or folders on a background thread. With `into_set`, the imported
+    /// tracks (new or already in the library) are also appended to that set.
+    pub fn start_import(
+        &mut self,
+        paths: Vec<PathBuf>,
+        into_set: Option<SetId>,
+        ctx: &egui::Context,
+    ) {
         if self.import.is_some() {
+            self.notify("An import is already running — try again when it finishes");
             return;
         }
         let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
@@ -242,12 +251,19 @@ impl DjApp {
             .spawn(move || {
                 let result = Library::open_in(&dir)
                     .and_then(|mut lib| {
-                        lib.import_folder(&folder, |n| {
+                        let summary = lib.import_paths(&paths, |n| {
                             p.store(n, std::sync::atomic::Ordering::Relaxed);
                             if n % 25 == 0 {
                                 ctx.request_repaint();
                             }
-                        })
+                        })?;
+                        let mut added_to_set = 0;
+                        if let Some(set) = into_set {
+                            for &id in &summary.tracks {
+                                added_to_set += usize::from(lib.add_to_set(set, id)?);
+                            }
+                        }
+                        Ok((summary, into_set.map(|_| added_to_set)))
                     })
                     .map_err(|e| e.to_string());
                 let _ = tx.send(result);
@@ -260,6 +276,18 @@ impl DjApp {
         });
     }
 
+    /// Files or folders dropped onto the window.
+    pub fn handle_dropped(&mut self, paths: Vec<PathBuf>, ctx: &egui::Context) {
+        if paths.is_empty() {
+            return;
+        }
+        let into_set = match self.view {
+            View::Set(id) => Some(id),
+            View::Library => None,
+        };
+        self.start_import(paths, into_set, ctx);
+    }
+
     fn poll_import(&mut self) {
         let Some(job) = &self.import else { return };
         let Ok(result) = job.result.try_recv() else {
@@ -267,13 +295,20 @@ impl DjApp {
         };
         self.import = None;
         match result {
-            Ok(s) => {
+            Ok((s, added_to_set)) => {
                 let mut msg = format!("Import finished: {} added", s.added);
                 if s.existing > 0 {
                     msg += &format!(", {} already in library", s.existing);
                 }
                 if s.skipped > 0 {
                     msg += &format!(", {} skipped (unreadable)", s.skipped);
+                }
+                if s.added + s.existing == 0 && s.ignored > 0 {
+                    msg = format!("No supported audio files ({} ignored)", s.ignored);
+                }
+                if let Some(n) = added_to_set {
+                    msg += &format!(" · {n} added to the set");
+                    self.reload_sets();
                 }
                 self.notify(msg);
                 if let (Some(pool), Some(lib)) = (&self.pool, self.library.as_mut()) {
@@ -495,7 +530,22 @@ impl eframe::App for DjApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        crate::shortcuts::handle(self, ui.ctx());
+        let ctx = ui.ctx().clone();
+        let (dropped, hovering) = ctx.input(|i| {
+            let dropped: Vec<PathBuf> = i
+                .raw
+                .dropped_files
+                .iter()
+                .map(|f| f.path().to_path_buf())
+                .filter(|p| !p.as_os_str().is_empty())
+                .collect();
+            (dropped, !i.raw.hovered_files.is_empty())
+        });
+        self.handle_dropped(dropped, &ctx);
+        crate::shortcuts::handle(self, &ctx);
         crate::ui::layout(self, ui);
+        if hovering {
+            crate::ui::drop_overlay(self, &ctx);
+        }
     }
 }
