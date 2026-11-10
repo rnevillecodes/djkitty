@@ -1,0 +1,186 @@
+//! Soft takeover for absolute controls (faders).
+//!
+//! A hardware fader is ignored while its physical position differs from the app's value
+//! (for example after the value was changed on screen) until the hardware passes through
+//! the app's value. On-screen changes are signalled through [`AppValues::set_from_ui`],
+//! which bumps a generation counter the MIDI thread watches.
+
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
+
+use djk_core::DeckId;
+
+/// Within this distance the hardware counts as matching the app value.
+pub const PICKUP_THRESHOLD: f32 = 0.02;
+
+/// An absolute control subject to soft takeover.
+#[derive(Copy, Clone, Debug, PartialEq, Eq)]
+pub enum FaderTarget {
+    Channel(DeckId),
+    Crossfader,
+    Pitch(DeckId),
+}
+
+impl FaderTarget {
+    pub const COUNT: usize = 5;
+
+    pub const fn index(self) -> usize {
+        match self {
+            FaderTarget::Channel(d) => d.index(),
+            FaderTarget::Crossfader => 2,
+            FaderTarget::Pitch(d) => 3 + d.index(),
+        }
+    }
+
+    /// Value range used to normalise distances (pitch is ±8%, the others 0–1).
+    fn span(self) -> f32 {
+        match self {
+            FaderTarget::Pitch(_) => 2.0 * djk_core::PITCH_RANGE,
+            _ => 1.0,
+        }
+    }
+}
+
+/// App-side fader values shared with the MIDI thread.
+pub struct AppValues {
+    values: [AtomicU32; FaderTarget::COUNT],
+    generations: [AtomicU32; FaderTarget::COUNT],
+}
+
+impl Default for AppValues {
+    fn default() -> Self {
+        let v = |x: f32| AtomicU32::new(x.to_bits());
+        Self {
+            // Engine defaults: faders up, crossfader centred, pitch 0.
+            values: [v(1.0), v(1.0), v(0.5), v(0.0), v(0.0)],
+            generations: Default::default(),
+        }
+    }
+}
+
+impl AppValues {
+    pub fn get(&self, t: FaderTarget) -> f32 {
+        f32::from_bits(self.values[t.index()].load(Ordering::Relaxed))
+    }
+
+    fn generation(&self, t: FaderTarget) -> u32 {
+        self.generations[t.index()].load(Ordering::Acquire)
+    }
+
+    /// Record a value without signalling a takeover (used by tests and initial sync).
+    pub fn set(&self, t: FaderTarget, value: f32) {
+        self.values[t.index()].store(value.to_bits(), Ordering::Relaxed);
+    }
+
+    /// The UI changed this value: the hardware fader must pick it up again.
+    pub fn set_from_ui(&self, t: FaderTarget, value: f32) {
+        self.set(t, value);
+        self.generations[t.index()].fetch_add(1, Ordering::Release);
+    }
+}
+
+#[derive(Copy, Clone, Debug, Default)]
+struct FaderState {
+    engaged: bool,
+    last_hw: Option<f32>,
+    seen_generation: u32,
+}
+
+/// Soft-takeover state for one controller connection.
+pub struct Takeover {
+    values: Arc<AppValues>,
+    state: [FaderState; FaderTarget::COUNT],
+}
+
+impl Takeover {
+    pub fn new(values: Arc<AppValues>) -> Self {
+        let mut state = [FaderState::default(); FaderTarget::COUNT];
+        for (i, s) in state.iter_mut().enumerate() {
+            s.seen_generation = values.generations[i].load(Ordering::Acquire);
+        }
+        Self { values, state }
+    }
+
+    /// Process a hardware value. Returns the value to apply, or `None` while waiting for
+    /// the hardware to reach the app value.
+    pub fn apply(&mut self, target: FaderTarget, hw: f32) -> Option<f32> {
+        let generation = self.values.generation(target);
+        let app = self.values.get(target);
+        let span = target.span();
+        let s = &mut self.state[target.index()];
+        if generation != s.seen_generation {
+            s.seen_generation = generation;
+            s.engaged = false;
+        }
+        if !s.engaged {
+            let close = (hw - app).abs() <= PICKUP_THRESHOLD * span;
+            let crossed = s
+                .last_hw
+                .is_some_and(|prev| (prev - app) * (hw - app) <= 0.0);
+            s.engaged = close || crossed;
+        }
+        s.last_hw = Some(hw);
+        if s.engaged {
+            // Keep the shared value current so later pickups compare against it.
+            self.values.set(target, hw);
+            Some(hw)
+        } else {
+            None
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const CH_A: FaderTarget = FaderTarget::Channel(DeckId::A);
+
+    fn setup() -> (Takeover, Arc<AppValues>) {
+        let values = Arc::new(AppValues::default());
+        (Takeover::new(values.clone()), values)
+    }
+
+    #[test]
+    fn follows_when_matching() {
+        let (mut t, _) = setup();
+        assert_eq!(t.apply(CH_A, 1.0), Some(1.0));
+        assert_eq!(t.apply(CH_A, 0.7), Some(0.7));
+    }
+
+    #[test]
+    fn value_changed_on_screen_waits_for_pickup() {
+        // Spec: app lowered to 20% on screen while hardware sits at 100%; moving the
+        // hardware from 100% to 90% leaves the level at 20% until it reaches 20%.
+        let (mut t, values) = setup();
+        assert_eq!(t.apply(CH_A, 1.0), Some(1.0));
+        values.set_from_ui(CH_A, 0.2);
+        for hw in [0.95, 0.9, 0.6, 0.3, 0.25] {
+            assert_eq!(t.apply(CH_A, hw), None, "hw {hw}");
+            assert_eq!(values.get(CH_A), 0.2);
+        }
+        assert_eq!(t.apply(CH_A, 0.19), Some(0.19), "crossed 20%");
+        assert_eq!(t.apply(CH_A, 0.5), Some(0.5), "follows after pickup");
+    }
+
+    #[test]
+    fn first_message_far_from_app_value_is_ignored() {
+        let (mut t, _) = setup(); // app crossfader 0.5
+        assert_eq!(t.apply(FaderTarget::Crossfader, 0.0), None);
+        assert_eq!(t.apply(FaderTarget::Crossfader, 0.3), None);
+        assert_eq!(t.apply(FaderTarget::Crossfader, 0.6), Some(0.6));
+    }
+
+    #[test]
+    fn pitch_pickup_uses_its_own_scale() {
+        let (mut t, values) = setup();
+        let p = FaderTarget::Pitch(DeckId::B);
+        values.set_from_ui(p, 0.04);
+        assert_eq!(t.apply(p, -0.08), None);
+        assert_eq!(
+            t.apply(p, 0.0399),
+            Some(0.0399),
+            "within 2% of the ±8% span"
+        );
+    }
+}
