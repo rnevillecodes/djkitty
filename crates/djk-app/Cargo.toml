@@ -1,0 +1,28 @@
+[package]
+name = "djk-app"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+djk-core.workspace = true
+djk-audio.workspace = true
+djk-analysis.workspace = true
+djk-library.workspace = true
+djk-controller.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+eframe.workspace = true
+egui.workspace = true
+rfd.workspace = true
+cpal.workspace = true
+midir.workspace = true
+num_cpus.workspace = true
+directories.workspace = true
+
+[[bin]]
+name = "djkitty"
+path = "src/main.rs"

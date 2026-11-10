@@ -2,8 +2,8 @@
 
 ## 1. Workspace and hardware discovery
 
-- [ ] 1.1 Create the Cargo workspace with crates `djk-core`, `djk-audio`, `djk-analysis`, `djk-library`, `djk-controller` and `djk-app` (binary) as in design §1, plus `.gitignore`, `rustfmt.toml` and a README stub; verify `cargo build --workspace` and `cargo clippy --workspace -- -D warnings` succeed
-- [ ] 1.2 Add `CONTRIBUTING.md` stating that all commits use Conventional Commits (with examples per crate scope, e.g. `feat(audio): …`); verify the file exists and the first commit follows it
+- [x] 1.1 Create the Cargo workspace with crates `djk-core`, `djk-audio`, `djk-analysis`, `djk-library`, `djk-controller` and `djk-app` (binary) as in design §1, plus `.gitignore`, `rustfmt.toml` and a README stub; verify `cargo build --workspace` and `cargo clippy --workspace -- -D warnings` succeed
+- [x] 1.2 Add `CONTRIBUTING.md` stating that all commits use Conventional Commits (with examples per crate scope, e.g. `feat(audio): …`); verify the file exists and the first commit follows it
 - [ ] 1.3 Add a `--list-audio-devices` dev flag to `djk-app` that prints every cpal output device with its supported channel counts, sample rates and buffer-size range; verify by running it with the DDJ-FLX2 connected and record whether it exposes 4 output channels in `docs/controllers/ddj-flx2.md`
 - [ ] 1.4 Add a `--midi-monitor` dev flag that lists MIDI ports and logs raw incoming messages from the DDJ-FLX2 (hex + decoded status/channel/data); verify by moving every v0.1 control and recording each control's message (including 14-bit fader MSB/LSB pairs and jog/browse encoder values) in `docs/controllers/ddj-flx2.md`
 - [ ] 1.5 Extend the MIDI monitor with an option to send a note/CC to the controller, and use it to discover the play, cue and headphone-cue LED messages; verify each LED lights on command and record the messages in `docs/controllers/ddj-flx2.md`

@@ -1,0 +1,14 @@
+[package]
+name = "djk-controller"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+djk-core.workspace = true
+midir.workspace = true
+rtrb.workspace = true
+thiserror.workspace = true
+tracing.workspace = true

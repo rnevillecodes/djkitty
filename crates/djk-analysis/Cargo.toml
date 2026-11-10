@@ -1,0 +1,17 @@
+[package]
+name = "djk-analysis"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+rust-version.workspace = true
+
+[dependencies]
+djk-core.workspace = true
+symphonia.workspace = true
+rustfft.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+hound.workspace = true
+tempfile.workspace = true
