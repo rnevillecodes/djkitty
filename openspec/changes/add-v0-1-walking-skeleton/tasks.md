@@ -18,7 +18,7 @@
 
 ## 3. Walking skeleton: decode, audio out, minimal window
 
-- [ ] 3.1 Implement full-track decoding in `djk-analysis` with symphonia (MP3, FLAC, WAV, AIFF, M4A/AAC) to interleaved stereo `f32` at native rate (mono duplicated, >2 channels downmixed), returning a typed error for undecodable files; verify with tests on small fixture files of each format and on a corrupt file
+- [x] 3.1 Implement full-track decoding in `djk-analysis` with symphonia (MP3, FLAC, WAV, AIFF, M4A/AAC) to interleaved stereo `f32` at native rate (mono duplicated, >2 channels downmixed), returning a typed error for undecodable files; verify with tests on small fixture files of each format and on a corrupt file
 - [ ] 3.2 Implement cpal output in `djk-audio`: device selection (prefer name containing "DDJ-FLX2", then saved choice, then default), smallest supported buffer size, 4-channel routing when available, stream error → disconnected flag; verify by playing a test tone through the DDJ-FLX2 master output, then the headphone output, and by unplugging during playback without a crash
 - [ ] 3.3 Create the minimal eframe app in `djk-app`: open a file dialog, decode on a loader thread, send `LoadBuffer` to deck A, show Play/Pause and Cue buttons, elapsed/remaining time from the snapshot, and drop retired buffers each frame; verify by loading an MP3 and hearing it play/pause/cue through the DDJ-FLX2
 - [ ] 3.4 Add the measured output latency (buffer size + device latency) and overrun count to a small status bar; verify the latency shown is ≤ 20 ms on the DDJ-FLX2 and overruns stay at 0 during 5 minutes of playback
