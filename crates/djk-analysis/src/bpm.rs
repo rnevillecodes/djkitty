@@ -12,6 +12,10 @@ const HOP: usize = 128;
 const MIN_PEAK: f32 = 0.2;
 /// The chosen lag must stand out from the average over the search range by this ratio.
 const MIN_PROMINENCE: f32 = 1.8;
+/// Minimum 99th-percentile onset strength: steady tones and pads produce tiny, periodic
+/// flux (STFT phase artefacts) that must not be mistaken for a beat. Real beats are ~100×
+/// stronger thanks to the log compression.
+const MIN_ONSET_STRENGTH: f32 = 5.0;
 
 /// Estimate the tempo of interleaved stereo audio. `None` when there is no clear pulse.
 pub fn detect_bpm(stereo: &[f32], rate: u32) -> Option<f32> {
@@ -82,6 +86,11 @@ fn prior(bpm: f32) -> f32 {
 
 fn tempo_from_envelope(env: &[f32], fps: f32) -> Option<f32> {
     if env.len() < (fps * 4.0) as usize {
+        return None;
+    }
+    let mut sorted = env.to_vec();
+    sorted.sort_by(f32::total_cmp);
+    if sorted[sorted.len() * 99 / 100] < MIN_ONSET_STRENGTH {
         return None;
     }
     let r0 = autocorr(env, 0);
@@ -214,6 +223,18 @@ mod tests {
             .flat_map(|_| {
                 seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
                 let v = ((seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0) * 0.3;
+                [v, v]
+            })
+            .collect();
+        assert_eq!(detect_bpm(&audio, 44_100), None);
+    }
+
+    #[test]
+    fn steady_tone_is_unknown() {
+        // A pure sustained sine has no beat (regression: phase artefacts looked periodic).
+        let audio: Vec<f32> = (0..44_100 * 30)
+            .flat_map(|i| {
+                let v = (2.0 * std::f32::consts::PI * 220.0 * i as f32 / 44_100.0).sin() * 0.1;
                 [v, v]
             })
             .collect();
