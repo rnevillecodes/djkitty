@@ -105,6 +105,7 @@ pub struct DjApp {
 
 impl DjApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+        egui_extras::install_image_loaders(&cc.egui_ctx);
         crate::theme::apply(&cc.egui_ctx);
         let data_dir = djk_library::default_data_dir().unwrap_or_else(|_| PathBuf::from("."));
         let settings = Settings::load(&data_dir);

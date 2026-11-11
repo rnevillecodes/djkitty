@@ -1022,11 +1022,15 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         section_heading(ui, "SETS");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
             let plus = ui
                 .add(
-                    egui::Button::new(RichText::new("+").size(16.0).strong())
-                        .min_size(Vec2::new(24.0, 22.0))
-                        .corner_radius(6),
+                    egui::Button::image_and_text(
+                        widgets::icon(widgets::icons::PLUS, 11.0, theme::TEXT),
+                        RichText::new("Add").size(11.0),
+                    )
+                    .min_size(Vec2::new(0.0, 20.0))
+                    .corner_radius(5),
                 )
                 .on_hover_text("New set");
             if plus.clicked() {
@@ -1038,9 +1042,8 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     // Filter at the top of the list (once there is something to filter).
     if !app.sets.is_empty() {
         ui.add(
-            egui::TextEdit::singleline(&mut app.set_filter)
+            widgets::text_field(&mut app.set_filter)
                 .hint_text("Search sets…")
-                .margin(egui::vec2(8.0, 5.0))
                 .desired_width(ui.available_width()),
         );
         ui.add_space(4.0);
@@ -1078,9 +1081,9 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
                     && *id == set.id
                 {
                     let resp = ui.add(
-                        egui::TextEdit::singleline(name)
+                        widgets::text_field(name)
                             .desired_width(ui.available_width())
-                            .margin(egui::vec2(8.0, 8.0)),
+                            .min_size(egui::vec2(0.0, 34.0)),
                     );
                     if resp.lost_focus() {
                         let commit = ui.input(|i| i.key_pressed(egui::Key::Enter));
@@ -1169,9 +1172,8 @@ fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
         );
         ui.add_space(10.0);
         let field = ui.add(
-            egui::TextEdit::singleline(&mut app.new_set_name)
+            widgets::text_field(&mut app.new_set_name)
                 .hint_text("Set name")
-                .margin(egui::vec2(8.0, 6.0))
                 .desired_width(f32::INFINITY),
         );
         // Focus the name field as soon as the dialog opens.
@@ -1609,9 +1611,8 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
             View::Set(_) => (&mut app.set_track_filter, "Filter this set  (Ctrl+F)"),
         };
         let search = ui.add(
-            egui::TextEdit::singleline(text)
+            widgets::text_field(text)
                 .hint_text(hint)
-                .margin(egui::vec2(8.0, 4.0))
                 .desired_width(240.0),
         );
         if app.focus_search {
@@ -1628,23 +1629,7 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
                     ui.spinner();
                     ui.label(format!("Importing… {n} files scanned"));
                 }
-                None => {
-                    if ui.button("Import folder…").clicked()
-                        && let Some(folder) = rfd::FileDialog::new().pick_folder()
-                    {
-                        let ctx = ui.ctx().clone();
-                        app.start_import(vec![folder], None, &ctx);
-                    }
-                    if ui.button("Import files…").clicked()
-                        && let Some(files) = rfd::FileDialog::new()
-                            .add_filter("Audio", djk_analysis::decode::SUPPORTED_EXTENSIONS)
-                            .pick_files()
-                        && !files.is_empty()
-                    {
-                        let ctx = ui.ctx().clone();
-                        app.start_import(files, None, &ctx);
-                    }
-                }
+                None => import_button(app, ui),
             }
             if let Some(pool) = &app.pool
                 && pool.is_busy()
@@ -2012,6 +1997,81 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
     }
 }
 
+/// What to pick when importing.
+#[derive(Clone, Copy)]
+enum ImportPick {
+    Files,
+    Folder,
+}
+
+/// Split button: "Import" picks files; the arrow opens a menu to pick files or a folder.
+/// Must be added inside a right-to-left layout (the arrow is added first, so it sits on
+/// the right).
+fn import_button(app: &mut DjApp, ui: &mut Ui) {
+    let mut pick = None;
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.x = 1.0;
+        let height = widgets::FIELD_HEIGHT;
+        let arrow = ui
+            .add(
+                egui::Button::image(widgets::icon(
+                    widgets::icons::CHEVRON_DOWN,
+                    16.0,
+                    theme::TEXT,
+                ))
+                .min_size(Vec2::new(24.0, height))
+                .corner_radius(egui::CornerRadius {
+                    nw: 0,
+                    sw: 0,
+                    ne: 6,
+                    se: 6,
+                }),
+            )
+            .on_hover_text("Import files or a folder");
+        egui::Popup::menu(&arrow)
+            .align(egui::RectAlign::BOTTOM_END)
+            .show(|ui| {
+                ui.set_min_width(140.0);
+                if ui.add(menu_item("Files", widgets::icons::FILE)).clicked() {
+                    pick = Some(ImportPick::Files);
+                }
+                if ui
+                    .add(menu_item("Folder", widgets::icons::FOLDER))
+                    .clicked()
+                {
+                    pick = Some(ImportPick::Folder);
+                }
+            });
+        let main = ui
+            .add(
+                egui::Button::new("Import")
+                    .min_size(Vec2::new(0.0, height))
+                    .corner_radius(egui::CornerRadius {
+                        nw: 6,
+                        sw: 6,
+                        ne: 0,
+                        se: 0,
+                    }),
+            )
+            .on_hover_text("Import audio files");
+        if main.clicked() {
+            pick = Some(ImportPick::Files);
+        }
+    });
+    let paths = match pick {
+        None => return,
+        Some(ImportPick::Files) => rfd::FileDialog::new()
+            .add_filter("Audio", djk_analysis::decode::SUPPORTED_EXTENSIONS)
+            .pick_files()
+            .unwrap_or_default(),
+        Some(ImportPick::Folder) => rfd::FileDialog::new().pick_folder().into_iter().collect(),
+    };
+    if !paths.is_empty() {
+        let ctx = ui.ctx().clone();
+        app.start_import(paths, None, &ctx);
+    }
+}
+
 // ---------------------------------------------------------------- status bar
 
 fn status_bar(app: &mut DjApp, ui: &mut Ui) {
@@ -2177,4 +2237,9 @@ pub fn drop_overlay(app: &DjApp, ctx: &egui::Context) {
         egui::FontId::proportional(14.0),
         theme::TEXT_DIM,
     );
+}
+
+/// A menu entry with its label on the left and an icon on the right.
+fn menu_item(label: &str, icon: egui::ImageSource<'static>) -> egui::Button<'static> {
+    egui::Button::new(label.to_owned()).right_text(widgets::icon(icon, 14.0, theme::TEXT_DIM))
 }

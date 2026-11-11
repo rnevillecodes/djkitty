@@ -603,3 +603,34 @@ mod tests {
         assert!((127..=128).contains(&c.r()));
     }
 }
+
+// ---------------------------------------------------------------- inputs and icons
+
+/// Height of single-line text fields, so they line up with buttons.
+pub const FIELD_HEIGHT: f32 = 28.0;
+
+/// A single-line text field with its text vertically centred.
+pub fn text_field(text: &mut String) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text)
+        .align(Align2::LEFT_CENTER)
+        .min_size(vec2(0.0, FIELD_HEIGHT))
+        .margin(vec2(8.0, 0.0))
+}
+
+/// SVG icons, drawn white so they can be tinted.
+pub mod icons {
+    use egui::ImageSource;
+
+    pub const PLUS: ImageSource<'static> = egui::include_image!("../assets/icons/plus.svg");
+    pub const CHEVRON_DOWN: ImageSource<'static> =
+        egui::include_image!("../assets/icons/chevron-down.svg");
+    pub const FILE: ImageSource<'static> = egui::include_image!("../assets/icons/file.svg");
+    pub const FOLDER: ImageSource<'static> = egui::include_image!("../assets/icons/folder.svg");
+}
+
+/// An icon image at `size` points, tinted `tint`.
+pub fn icon(source: egui::ImageSource<'static>, size: f32, tint: Color32) -> egui::Image<'static> {
+    egui::Image::new(source)
+        .fit_to_exact_size(vec2(size, size))
+        .tint(tint)
+}
