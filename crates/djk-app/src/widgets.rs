@@ -3,7 +3,7 @@
 //! the screen reads like the controller in front of you.
 //!
 //! Every value control follows the same rules: drag to change (hold Shift for fine
-//! control), click the track to jump, and Ctrl/Cmd+click or double-click to reset.
+//! control), and Ctrl/Cmd+click or double-click to reset. A plain click never moves them.
 
 use egui::epaint::PathShape;
 use egui::{
@@ -52,10 +52,8 @@ fn glow(painter: &Painter, centre: Pos2, radius: f32, colour: Color32, strength:
 
 /// Shared value-control input handling. Returns the new normalised value, if any.
 ///
-/// `travel` converts pointer movement along `axis` to value; `jump_to` maps a click
-/// position to a value (for clicks on the track rather than drags), or `None` to stay
-/// put: clicking a fader's cap grabs it, so double-clicking the cap resets it without
-/// first jumping to wherever the pointer was.
+/// `travel` converts pointer movement along `axis` to value. Only drags move the value:
+/// a plain click does nothing, so a double-click resets without moving first.
 fn value_input(
     ui: &Ui,
     resp: &Response,
@@ -63,17 +61,10 @@ fn value_input(
     default_t: f32,
     travel: f32,
     axis: Vec2,
-    jump_to: impl Fn(Pos2) -> Option<f32>,
 ) -> Option<f32> {
     let reset = ui.input(|i| i.modifiers.command);
     if resp.double_clicked() || (resp.clicked() && reset) {
         return Some(default_t);
-    }
-    if resp.clicked() {
-        return resp
-            .interact_pointer_pos()
-            .and_then(jump_to)
-            .map(|v| v.clamp(0.0, 1.0));
     }
     if resp.dragged() && !reset {
         let fine = if ui.input(|i| i.modifiers.shift) {
@@ -132,9 +123,7 @@ pub fn fader(
     let span = end - start;
     let travel = span.length();
     let axis = span / travel.max(1.0);
-    let cap_hit = Rect::from_center_size(start + span * t, cap);
-    let jump = |p: Pos2| (!cap_hit.contains(p)).then(|| (p - start).dot(axis) / travel.max(1.0));
-    let mut out = value_input(ui, &resp, t, default_t, travel, axis, jump);
+    let mut out = value_input(ui, &resp, t, default_t, travel, axis);
     if style.centre_detent
         && let Some(v) = out.as_mut()
         && resp.dragged()
@@ -287,22 +276,7 @@ pub fn knob(
     };
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), sense);
     let out = if enabled {
-        let c = rect.center();
-        // Clicking the ring jumps to the angle under the pointer; clicking the body grabs
-        // it in place, so double-clicking the body resets without a jump first.
-        let body_r = diameter / 2.0 - 7.0;
-        let jump = move |p: Pos2| {
-            let d = p - c;
-            if d.length() < body_r {
-                return None;
-            }
-            let mut a = d.y.atan2(d.x) - KNOB_START;
-            while a < 0.0 {
-                a += std::f32::consts::TAU;
-            }
-            Some((a / KNOB_SWEEP).min(if a > KNOB_SWEEP + 0.5 { 0.0 } else { 1.0 }))
-        };
-        let v = value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0), jump);
+        let v = value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0));
         if bipolar && resp.dragged() {
             v.map(|v| if (v - 0.5).abs() < 0.015 { 0.5 } else { v })
         } else {
