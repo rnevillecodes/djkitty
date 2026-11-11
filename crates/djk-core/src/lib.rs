@@ -84,6 +84,12 @@ pub enum Command {
     SetHeadphoneCue { deck: DeckId, enabled: bool },
     /// Toggle headphone cue for a deck.
     ToggleHeadphoneCue(DeckId),
+    /// EQ knob position for one band of a deck, 0 (kill) to 1 (+6 dB), 0.5 = 0 dB.
+    SetEq {
+        deck: DeckId,
+        band: EqBand,
+        value: f32,
+    },
 }
 
 /// A fully decoded track: interleaved stereo `f32` at its native sample rate.
@@ -169,6 +175,39 @@ impl DeckState {
     }
 }
 
+/// One band of a channel's 3-band EQ.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub enum EqBand {
+    Low,
+    Mid,
+    High,
+}
+
+impl EqBand {
+    /// Top to bottom, as on a mixer.
+    pub const ALL: [EqBand; 3] = [EqBand::High, EqBand::Mid, EqBand::Low];
+
+    /// Index into [`MixerState::eq`] (low, mid, high).
+    pub const fn index(self) -> usize {
+        match self {
+            EqBand::Low => 0,
+            EqBand::Mid => 1,
+            EqBand::High => 2,
+        }
+    }
+
+    pub const fn label(self) -> &'static str {
+        match self {
+            EqBand::Low => "LOW",
+            EqBand::Mid => "MID",
+            EqBand::High => "HI",
+        }
+    }
+}
+
+/// EQ knob position for 0 dB (no change).
+pub const EQ_NEUTRAL: f32 = 0.5;
+
 /// Snapshot of the mixer controls.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MixerState {
@@ -177,6 +216,8 @@ pub struct MixerState {
     pub master_level: f32,
     pub headphone_level: f32,
     pub headphone_cue: [bool; DECK_COUNT],
+    /// EQ knob positions per deck, `[low, mid, high]`, 0 (kill) to 1 (+6 dB), centre 0 dB.
+    pub eq: [[f32; 3]; DECK_COUNT],
 }
 
 impl Default for MixerState {
@@ -187,6 +228,7 @@ impl Default for MixerState {
             master_level: 1.0,
             headphone_level: 0.8,
             headphone_cue: [false; DECK_COUNT],
+            eq: [[EQ_NEUTRAL; 3]; DECK_COUNT],
         }
     }
 }

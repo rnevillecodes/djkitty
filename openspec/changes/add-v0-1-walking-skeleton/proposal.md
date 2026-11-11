@@ -11,12 +11,12 @@ djkitty aims to be an open-source DJ app "that grows with you": simple and intui
 - Analyse each track for duration, format, sample rate, bitrate, BPM and musical key (key is best-effort), and precompute waveform data.
 - Create, rename, reorder and delete simple sets (ordered lists of library tracks) and show their total length.
 - Two decks, each able to load a track, play/pause, cue (return to cue point), and change tempo with a pitch fader (no key-lock in v0.1).
-- A mixer with per-channel volume faders, a crossfader, and headphone pre-listen (cue) routed to a separate output pair.
+- A mixer with per-channel volume faders, a 3-band EQ (high/mid/low, with full kill) per channel, a crossfader, and headphone pre-listen (cue) routed to a separate output pair.
 - Audio out through the DDJ-FLX2's built-in USB sound card: master on one stereo pair, headphones on another.
-- DDJ-FLX2 support over USB MIDI: transport buttons, faders, crossfader, pitch, load and browse controls, with LED feedback for play/cue state.
+- DDJ-FLX2 support over USB MIDI: transport buttons, faders, crossfader, EQ knobs, pitch, load and browse controls, with LED feedback for play/cue state.
 - Realtime UI: a scrolling waveform per deck with a playhead, a full-track overview with position, BPM/key readouts, and a connection status indicator.
 
-Explicitly **out of scope** for v0.1: key-lock/time-stretch, beat sync, beatgrids, scratching/jog-wheel platter behaviour (jogs may only nudge), effects, loops, hot cues, EQ, stems, recording, learning hints, streaming services, and controllers other than the DDJ-FLX2.
+Explicitly **out of scope** for v0.1: key-lock/time-stretch, beat sync, beatgrids, scratching/jog-wheel platter behaviour (jogs may only nudge), filters, effects, loops, hot cues, stems, recording, learning hints, streaming services, and controllers other than the DDJ-FLX2.
 
 ## Capabilities
 

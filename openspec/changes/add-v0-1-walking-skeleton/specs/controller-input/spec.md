@@ -26,7 +26,7 @@ The system SHALL offer every v0.1 deck and mixer action through the on-screen UI
 
 #### Scenario: No controller
 - **WHEN** no controller is connected
-- **THEN** the user can load, play, cue, adjust pitch, move faders and toggle headphone cue on screen
+- **THEN** the user can load, play, cue, adjust pitch, move faders, adjust EQ and toggle headphone cue on screen
 
 ### Requirement: DDJ-FLX2 deck controls
 For each deck, the system SHALL map the controller's play/pause, cue, pitch fader and jog wheel to the matching deck actions in deck-playback.
@@ -40,7 +40,7 @@ For each deck, the system SHALL map the controller's play/pause, cue, pitch fade
 - **THEN** deck B's tempo changes to match the fader position
 
 ### Requirement: DDJ-FLX2 mixer controls
-The system SHALL map the controller's channel faders, crossfader and headphone cue buttons to the matching mixer actions. Controls that are analogue on the hardware (such as the master and headphone volume knobs on the DDJ-FLX2) are outside the software's control.
+The system SHALL map the controller's channel faders, EQ knobs (high, mid and low), crossfader and headphone cue buttons to the matching mixer actions. Controls that are analogue on the hardware (such as the master and headphone volume knobs on the DDJ-FLX2) are outside the software's control.
 
 #### Scenario: Crossfader
 - **WHEN** the user moves the crossfader fully right on the controller
@@ -50,6 +50,10 @@ The system SHALL map the controller's channel faders, crossfader and headphone c
 - **WHEN** the user presses deck A's headphone cue button
 - **THEN** headphone cue is toggled for deck A
 
+#### Scenario: EQ knob
+- **WHEN** the user turns the left channel's low EQ knob fully down on the controller
+- **THEN** deck A's low band is cut
+
 ### Requirement: DDJ-FLX2 library controls
 The system SHALL map the controller's browse knob to moving the selection in the visible track list (library or set), and its load buttons to loading the selected track onto the matching deck.
 
@@ -58,7 +62,7 @@ The system SHALL map the controller's browse knob to moving the selection in the
 - **THEN** the selection moves down two tracks and that track is loaded onto deck A
 
 ### Requirement: Soft takeover for faders
-The system SHALL ignore a controller fader whose physical position differs from the app's value, such as after the value was changed on screen, until the physical fader passes through the app's value, to avoid sudden jumps.
+The system SHALL ignore a controller fader or EQ knob whose physical position differs from the app's value, such as after the value was changed on screen, until the physical control passes through the app's value, to avoid sudden jumps.
 
 #### Scenario: Value changed on screen
 - **WHEN** deck A's channel fader was lowered on screen to 20% while the hardware fader sits at 100%, and the user then moves the hardware fader from 100% to 90%

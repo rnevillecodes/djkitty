@@ -4,7 +4,9 @@
 use std::time::{Duration, Instant};
 
 use djk_controller::FaderTarget;
-use djk_core::{Bpm, Command, DeckId, DeckState, EngineState, MixerState, PITCH_RANGE};
+use djk_core::{
+    Bpm, Command, DeckId, DeckState, EQ_NEUTRAL, EngineState, EqBand, MixerState, PITCH_RANGE,
+};
 use djk_library::SortKey;
 use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
@@ -17,7 +19,7 @@ use crate::widgets;
 
 /// Height of the row holding the two deck panels and the mixer.
 const DECKS_ROW_HEIGHT: f32 = 222.0;
-const MIXER_WIDTH: f32 = 250.0;
+const MIXER_WIDTH: f32 = 280.0;
 const MESSAGE_SECS: u64 = 5;
 /// Gap between the stacked waveform lanes.
 const LANE_GAP: f32 = 4.0;
@@ -597,7 +599,9 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let rect = card(ui, theme::TEXT_DIM, |ui| {
         let full = ui.available_rect_before_wrap();
         // Lay the strip out on a fixed grid, centred in the card.
-        let content_w = 194.0;
+        // Columns, left to right: LEVEL/PHONES knobs, deck A EQ, A meter, A fader,
+        // B fader, B meter, deck B EQ, master meters.
+        let content_w = 254.0;
         let x0 = full.left() + ((full.width() - content_w) / 2.0).max(0.0);
         let y0 = full.top();
         let at = |x: f32, y: f32, w: f32, h: f32| {
@@ -625,7 +629,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
         let xf_h = 28.0;
         let xf_top = full.height() - xf_h;
         let fader_h = (xf_top - top - 22.0).max(60.0);
-        for (deck, fx, mx) in [(DeckId::A, 60.0, 50.0), (DeckId::B, 110.0, 148.0)] {
+        for (deck, fx, mx) in [(DeckId::A, 98.0, 88.0), (DeckId::B, 142.0, 180.0)] {
             let i = deck.index();
             widgets::meter(
                 ui.painter(),
@@ -662,18 +666,62 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             );
         }
 
+        // EQ: HI, MID and LOW knobs (top to bottom, as on a mixer) on the outer side of
+        // each channel, each in its waveform band colour; red when the band is killed.
+        let eq_d = 30.0;
+        let eq_step = ((fader_h + 14.0) / 3.0).max(eq_d + 10.0);
+        for (deck, cx) in [(DeckId::A, 64.0), (DeckId::B, 210.0)] {
+            for (k, band) in EqBand::ALL.into_iter().enumerate() {
+                let value = m.eq[deck.index()][band.index()];
+                let colour = if value <= 0.001 {
+                    theme::DANGER
+                } else {
+                    match band {
+                        EqBand::High => theme::BAND_HIGH,
+                        EqBand::Mid => theme::BAND_MID,
+                        EqBand::Low => theme::BAND_LOW,
+                    }
+                };
+                let y = top + k as f32 * eq_step;
+                place(ui, at(cx - eq_d / 2.0, y, eq_d, eq_d), &mut |ui| {
+                    let (resp, new) =
+                        widgets::knob(ui, eq_d, value, EQ_NEUTRAL, colour, true, true);
+                    if let Some(v) = new {
+                        app.audio.send(Command::SetEq {
+                            deck,
+                            band,
+                            value: v,
+                        });
+                        app.ui_fader(FaderTarget::Eq(deck, band), v);
+                    }
+                    let shown = new.unwrap_or(value);
+                    let db = match djk_audio::eq::knob_db(shown) {
+                        None => "kill".to_string(),
+                        Some(db) if db.abs() < 0.05 => "0 dB".to_string(),
+                        Some(db) => format!("{db:+.1} dB"),
+                    };
+                    resp.on_hover_text(format!(
+                        "Deck {} {} EQ: {db} · drag up/down · {RESET_HINT}",
+                        deck.label(),
+                        band.label()
+                    ));
+                });
+                label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
+            }
+        }
+
         // Master meter (left/right).
         widgets::meter(
             ui.painter(),
-            at(176.0, top + 2.0, 5.0, fader_h - 4.0),
+            at(236.0, top + 2.0, 5.0, fader_h - 4.0),
             meters[2],
         );
         widgets::meter(
             ui.painter(),
-            at(185.0, top + 2.0, 5.0, fader_h - 4.0),
+            at(245.0, top + 2.0, 5.0, fader_h - 4.0),
             meters[3],
         );
-        label(ui, 183.0, top + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
+        label(ui, 243.0, top + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
 
         // Master and headphone level knobs.
         let knobs = [
@@ -696,7 +744,8 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
         ];
         for (name, y, value, default, enabled, is_master) in knobs {
             place(ui, at(1.0, y, 38.0, 38.0), &mut |ui| {
-                let (resp, new) = widgets::knob(ui, 38.0, value, default, theme::TEXT, enabled);
+                let (resp, new) =
+                    widgets::knob(ui, 38.0, value, default, theme::TEXT, enabled, false);
                 if let Some(v) = new {
                     app.audio.send(if is_master {
                         Command::SetMasterLevel(v)

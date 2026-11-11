@@ -24,6 +24,21 @@ The system SHALL blend decks A and B in the master mix with a crossfader: fully 
 - **WHEN** the crossfader is centred
 - **THEN** both decks are heard in the master output at their channel-fader levels
 
+### Requirement: Three-band EQ
+The system SHALL provide a 3-band EQ (high, mid and low) for each deck, applied before the channel fader. Each band SHALL range from a full cut (the band is removed) to a +6 dB boost, with no change at the centre position. EQ changes SHALL be smooth, without audible clicks.
+
+#### Scenario: Neutral EQ
+- **WHEN** all three EQ knobs of a deck are centred
+- **THEN** that deck's sound is unchanged
+
+#### Scenario: Bass kill
+- **WHEN** deck A plays a track with bass and its low EQ knob is turned fully down
+- **THEN** the bass is removed from deck A's output while its mids and highs are unaffected
+
+#### Scenario: Fast knob move
+- **WHEN** an EQ knob is turned quickly from centre to full cut
+- **THEN** the change is heard without a click
+
 ### Requirement: Master level and clipping protection
 The system SHALL provide a master level control and SHALL prevent the master output from hard-clipping digitally, by limiting it rather than wrapping or distorting harshly.
 

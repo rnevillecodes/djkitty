@@ -41,6 +41,9 @@ LSB CC (MSB number + 0x20).
 | Jog wheel, top        | CC `0x22`, relative, 64 = still     | _todo_ |
 | Jog touch             | note `0x36`                         | _todo_ |
 | Channel fader         | CC `0x13` MSB / `0x33` LSB          | _todo_ |
+| EQ HI knob            | CC `0x07` MSB / `0x27` LSB          | _todo_ |
+| EQ MID knob           | CC `0x0B` MSB / `0x2B` LSB          | _todo_ |
+| EQ LOW knob           | CC `0x0F` MSB / `0x2F` LSB          | _todo_ |
 | Headphone cue         | note `0x54`, deck channel           | _todo_ |
 | Crossfader            | CC `0x1F` MSB / `0x3F` LSB, ch 7    | _todo_ |
 | Browse encoder        | CC `0x40`, ch 7, relative           | _todo_ |

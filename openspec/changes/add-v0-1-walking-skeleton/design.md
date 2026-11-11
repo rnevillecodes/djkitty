@@ -89,6 +89,7 @@ It uses 4-point Hermite interpolation. One code path covers sample-rate conversi
 - Crossfader: a standard "full at centre" curve, `gA = min(1, 2*(1-x))` and `gB = min(1, 2*x)` for `x` in [0, 1], applied after the channel faders. This matches the `audio-mixing` spec (centre means both at full level). Selectable curves come later.
 - Master: master gain, then a simple peak limiter (fast attack, ~100 ms release) with a hard ceiling at −0.3 dBFS as a final safety net, so the output never wraps.
 - Headphones: the sum of cue-enabled decks, taken before the channel fader and crossfader, times the headphone gain. If no deck has cue enabled, the headphones carry the master. The headphone bus also goes through the limiter.
+- EQ: a per-deck 3-band isolator, applied right after the deck and before the channel fader (so the channel meter is post-EQ). Each channel splits into low/mid/high with 4th-order Linkwitz-Riley crossovers at 250 Hz and 4 kHz. The low band also passes through the 4 kHz crossover (split and summed) so its phase matches the other bands, which makes the three sum flat when every knob is centred. Knob curve: centre = 0 dB, full right = +6 dB, the lower half covers −26..0 dB and the last few percent fade to a full kill. Gains glide per sample with a ~10 ms one-pole smoother, so knob moves never click. All of it runs in the existing allocation-free render path, driven by a `SetEq { deck, band, value }` command; knob values are published in `EngineState`.
 
 ### 6. Analysis pipeline (in-house DSP, permissive dependencies)
 
@@ -114,7 +115,7 @@ All analysis decodes once, mixes down to mono, and resamples to 22,050 Hz for BP
 
 - `midir` opens the input and output ports whose names contain "DDJ-FLX2". A 1-second poll of the port list handles hot-plug, and on connect the app resyncs all LEDs from the current snapshot.
 - A mapping is a static table: `(status, data1) -> Control`, where `Control` is a button, a 14-bit absolute value (Pioneer sends faders as MSB/LSB CC pairs) or a relative encoder (jog/browse, centred on 64). A pure function `translate(Control, value, &mut TakeoverState) -> Option<Command>` turns it into engine commands. It's unit-testable with recorded MIDI bytes.
-- Soft takeover: track the last hardware value per fader, and only apply it once the hardware crosses the engine's current value.
+- Soft takeover: track the last hardware value per fader (and per EQ knob, which is also a 14-bit absolute control), and only apply it once the hardware crosses the engine's current value.
 - LED output: on each UI frame, compare the snapshot with the last-sent LED state and send only the changes.
 - The actual FLX2 message numbers come from AlphaTheta's published MIDI message list if one is available. Otherwise they come from a built-in **MIDI monitor dev mode** (`djkitty --midi-monitor`) that logs raw messages, which is the first task.
 
@@ -123,7 +124,7 @@ All analysis decodes once, mixes down to mono, and resamples to 22,050 Hz for BP
 ### 9. UI (egui/eframe)
 
 - `eframe` with the `wgpu` renderer. A custom dark theme (one accent colour per deck, larger hit targets) supports the "simple and intuitive" goal.
-- Layout: two deck panels on top (scrolling waveform, overview, BPM/key, time, transport, pitch), a mixer strip in the middle (channel faders, crossfader, cue toggles), and a sidebar plus track table at the bottom (Library / Sets).
+- Layout: two deck panels on top (scrolling waveform, overview, BPM/key, time, transport, pitch), a mixer strip in the middle (channel faders with meters, a HI/MID/LOW EQ knob column beside each channel, crossfader, cue toggles), and a sidebar plus track table at the bottom (Library / Sets).
 - **Waveform rendering:** build an egui `Mesh` per deck each frame from the cached detail bins in the visible window (8 s × 150 bins/s = 1,200 columns, cheap), with colours mixed from band levels. Display position = snapshot position + (now − snapshot timestamp) × current rate − output latency, so scrolling is smooth between audio callbacks and matches what you hear.
 - Request continuous repaint while any deck is playing, and repaint on input otherwise, to save battery when idle.
 - Keyboard shortcuts for the main deck actions as a no-controller fallback (exact keys are set during implementation).

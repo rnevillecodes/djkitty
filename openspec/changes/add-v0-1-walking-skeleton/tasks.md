@@ -15,6 +15,7 @@
 - [x] 2.3 Implement CDJ-style cue behaviour (set when paused, return-and-pause when playing, hold-to-preview at cue point) and jog behaviour (nudge while playing, seek while paused); verify with render tests for every scenario in the `deck-playback` spec's Cue and Jog nudge requirements
 - [x] 2.4 Implement the `Mixer`: squared channel-fader curve, full-at-centre crossfader, master gain, headphone bus (pre-fader cue sum, or master when no cue selected), and a peak limiter with a −0.3 dBFS ceiling on both buses; verify with render tests covering every `audio-mixing` scenario for faders, crossfader, headphone cue and clipping protection (two full-scale signals never exceed the ceiling)
 - [x] 2.5 Implement `Engine::process(out: &mut [f32], channels)` that drains both command queues (`rtrb`), renders decks through the mixer, routes master to channels 1–2 and headphones to 3–4 (master-only for 2 channels), publishes an `EngineState` via a triple buffer and pushes replaced buffers onto a retire queue; verify with a test that runs `process` under an allocation-counting global allocator and asserts zero allocations/frees after warm-up
+- [x] 2.6 Implement the per-deck 3-band isolator EQ (design §5: Linkwitz-Riley crossovers at 250 Hz / 4 kHz summing flat, knob curve from full kill to +6 dB, ~10 ms gain smoothing) before the channel fader, with a `SetEq` command and EQ values in `EngineState`; verify with tests that centred knobs are flat (±0.1 dB at 50 Hz–10 kHz), each band's kill cuts it by >40 dB while the others stay within 1 dB, full boost adds 6 dB, snapping a knob produces no click, a kill works through the engine, and the zero-allocation test still passes
 
 ## 3. Walking skeleton: decode, audio out, minimal window
 
@@ -31,6 +32,7 @@
 - [ ] 4.4 Route translated commands from the midir callback straight to the engine's controller queue, and send browse/load actions to the UI via a channel; verify play/cue/pitch/jog/faders/crossfader/headphone cue on the hardware drive the engine with no perceptible lag
 - [ ] 4.5 Implement LED feedback (diff snapshot vs last-sent state each frame; play lit while playing; cue lit at cue point / blinking when paused elsewhere; headphone cue LEDs) and full resync on connect; verify the `controller-input` LED scenarios on hardware, including reconnect while playing
 - [ ] 4.6 Document the final DDJ-FLX2 mapping (control → action table) in `docs/controllers/ddj-flx2.md`; verify every v0.1 control in the table works as documented
+- [ ] 4.7 Map the DDJ-FLX2's HI/MID/LOW EQ knobs per channel (14-bit, provisional FLX4 numbers until recorded with `--midi-monitor`) to `SetEq` with soft takeover; verify with a unit test that a knob is ignored until it picks up the centre and then drives its band (done), and on hardware that each knob drives its own band with no jump after an on-screen change
 
 ## 5. Track library
 
@@ -60,6 +62,7 @@
 - [ ] 8.5 Implement the scrolling deck waveform (mesh from detail bins in an ~8 s window, band-mixed colours, fixed playhead, position extrapolated from snapshot timestamp and compensated for output latency) with continuous repaint only while playing; verify that it scrolls smoothly at ≥ 60 fps with both decks playing and stays visually in sync with the kick drum at 0% and +6% pitch
 - [ ] 8.6 Implement the overview waveform per deck (position and cue markers, click-to-seek when paused) and the track details view (file stats, BPM, key in both notations, small overview); verify the `waveform-display` overview and details scenarios
 - [ ] 8.7 Add keyboard shortcuts for core deck actions and list them in the README; verify each documented shortcut works
+- [ ] 8.8 Add a HI/MID/LOW EQ knob column beside each channel fader in the mixer strip (arcs in the waveform band colours growing from centre, red at full kill, centre snap, double-click/Ctrl+click reset, dB on hover); verify by screenshot (done) and by ear that each on-screen knob changes its band of the deck's sound
 
 ## 9. End-to-end verification
 

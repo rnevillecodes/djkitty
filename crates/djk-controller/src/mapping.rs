@@ -91,6 +91,7 @@ use DeckId::{A, B as DB};
 use Encoder as E;
 use FaderTarget as F;
 use Part::{Lsb, Msb};
+use djk_core::EqBand::{High, Low, Mid};
 
 /// Pioneer DJ / AlphaTheta DDJ-FLX2.
 ///
@@ -114,6 +115,12 @@ pub static DDJ_FLX2: Mapping = Mapping {
         ((0xB0, 0x20), C::Fader(F::Pitch(A), Lsb)),
         ((0xB0, 0x13), C::Fader(F::Channel(A), Msb)),
         ((0xB0, 0x33), C::Fader(F::Channel(A), Lsb)),
+        ((0xB0, 0x07), C::Fader(F::Eq(A, High), Msb)),
+        ((0xB0, 0x27), C::Fader(F::Eq(A, High), Lsb)),
+        ((0xB0, 0x0B), C::Fader(F::Eq(A, Mid), Msb)),
+        ((0xB0, 0x2B), C::Fader(F::Eq(A, Mid), Lsb)),
+        ((0xB0, 0x0F), C::Fader(F::Eq(A, Low), Msb)),
+        ((0xB0, 0x2F), C::Fader(F::Eq(A, Low), Lsb)),
         ((0xB0, 0x21), C::Encoder(E::Jog(A))),
         ((0xB0, 0x22), C::Encoder(E::Jog(A))),
         ((0xB0, 0x23), C::Encoder(E::Jog(A))),
@@ -125,6 +132,12 @@ pub static DDJ_FLX2: Mapping = Mapping {
         ((0xB1, 0x20), C::Fader(F::Pitch(DB), Lsb)),
         ((0xB1, 0x13), C::Fader(F::Channel(DB), Msb)),
         ((0xB1, 0x33), C::Fader(F::Channel(DB), Lsb)),
+        ((0xB1, 0x07), C::Fader(F::Eq(DB, High), Msb)),
+        ((0xB1, 0x27), C::Fader(F::Eq(DB, High), Lsb)),
+        ((0xB1, 0x0B), C::Fader(F::Eq(DB, Mid), Msb)),
+        ((0xB1, 0x2B), C::Fader(F::Eq(DB, Mid), Lsb)),
+        ((0xB1, 0x0F), C::Fader(F::Eq(DB, Low), Msb)),
+        ((0xB1, 0x2F), C::Fader(F::Eq(DB, Low), Lsb)),
         ((0xB1, 0x21), C::Encoder(E::Jog(DB))),
         ((0xB1, 0x22), C::Encoder(E::Jog(DB))),
         ((0xB1, 0x23), C::Encoder(E::Jog(DB))),
@@ -221,6 +234,7 @@ fn fader_command(target: FaderTarget, value: f32) -> Command {
         F::Channel(deck) => Command::SetChannelFader { deck, value },
         F::Crossfader => Command::SetCrossfader(value),
         F::Pitch(deck) => Command::SetPitch { deck, pitch: value },
+        F::Eq(deck, band) => Command::SetEq { deck, band, value },
     }
 }
 
@@ -291,6 +305,31 @@ mod tests {
         assert_eq!(deck, A);
         let expected = ((64u16 << 7) | 32) as f32 / 16383.0;
         assert!((value - expected).abs() < 1e-6);
+    }
+
+    #[test]
+    fn eq_knob_kills_after_picking_up_the_centre() {
+        let (mut t, _) = translator();
+        // App EQ starts centred: a hardware knob far from it is ignored...
+        assert_eq!(t.translate(&[0xB1, 0x0F, 0x00]), None);
+        // ...until it passes the centre, then it follows the knob down to a kill.
+        t.translate(&[0xB1, 0x0F, 0x40]);
+        t.translate(&[0xB1, 0x0F, 0x00]);
+        let cmd = engine(t.translate(&[0xB1, 0x2F, 0x00]));
+        assert_eq!(
+            cmd,
+            Command::SetEq {
+                deck: DB,
+                band: Low,
+                value: 0.0
+            }
+        );
+        // The deck A HI knob maps too.
+        t.translate(&[0xB0, 0x07, 0x40]);
+        let Command::SetEq { deck, band, .. } = engine(t.translate(&[0xB0, 0x27, 0x00])) else {
+            panic!()
+        };
+        assert_eq!((deck, band), (A, High));
     }
 
     #[test]

@@ -11,6 +11,7 @@ use rtrb::{Consumer, Producer, RingBuffer};
 use triple_buffer::{Input, Output};
 
 use crate::deck::Deck;
+use crate::eq::Eq;
 use crate::mixer::Mixer;
 
 /// Frames rendered per internal chunk; larger callbacks are processed in several chunks.
@@ -80,6 +81,8 @@ pub struct Engine {
     frames_rendered: u64,
     channel_peak: [f32; DECK_COUNT],
     master_peak: [f32; 2],
+    /// Per-deck 3-band EQ, applied before the channel fader.
+    eqs: [Eq; DECK_COUNT],
 }
 
 impl Engine {
@@ -108,6 +111,7 @@ impl Engine {
             frames_rendered: 0,
             channel_peak: [0.0; DECK_COUNT],
             master_peak: [0.0; 2],
+            eqs: [Eq::new(device_rate), Eq::new(device_rate)],
         };
         engine.publish(None);
         let handles = EngineHandles {
@@ -126,6 +130,9 @@ impl Engine {
         self.device_rate = device_rate;
         self.output_channels = output_channels;
         self.mixer.set_sample_rate(device_rate);
+        for eq in &mut self.eqs {
+            eq.set_sample_rate(device_rate);
+        }
         self.publish(None);
     }
 
@@ -157,14 +164,17 @@ impl Engine {
         self.master_peak = [0.0; 2];
         while done < total_frames {
             let n = (total_frames - done).min(CHUNK_FRAMES);
-            for ((deck, buf), peak) in self
+            for (((deck, buf), peak), eq) in self
                 .decks
                 .iter_mut()
                 .zip(self.scratch.iter_mut())
                 .zip(self.channel_peak.iter_mut())
+                .zip(self.eqs.iter_mut())
             {
                 let [l, r] = buf;
                 deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                // EQ before the channel fader, so the channel meter is post-EQ.
+                eq.process(&mut l[..n], &mut r[..n]);
                 for (a, b) in l[..n].iter().zip(&r[..n]) {
                     *peak = peak.max(a.abs()).max(b.abs());
                 }
@@ -262,6 +272,10 @@ impl Engine {
             Command::ToggleHeadphoneCue(d) => {
                 mix.headphone_cue[d.index()] = !mix.headphone_cue[d.index()];
             }
+            Command::SetEq { deck, band, value } => {
+                mix.eq[deck.index()][band.index()] = value.clamp(0.0, 1.0);
+                self.eqs[deck.index()].set_knobs(mix.eq[deck.index()]);
+            }
         }
     }
 
@@ -344,6 +358,43 @@ mod tests {
     }
 
     #[test]
+    fn eq_kill_silences_a_band_through_the_engine() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        // A 60 Hz tone: all low band.
+        let n = 48_000;
+        let s: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let v = (2.0 * std::f32::consts::PI * 60.0 * i as f32 / 48_000.0).sin() * 0.5;
+                [v, v]
+            })
+            .collect();
+        load(
+            &mut h,
+            DeckId::A,
+            TrackBuffer {
+                samples: Arc::from(s),
+                sample_rate: 48_000,
+            },
+            1,
+        );
+        h.send(Command::Play(DeckId::A));
+        let mut out = vec![0.0; 2048 * 2];
+        e.process(&mut out, 2, None);
+        assert!(h.state.read().master_peak[0] > 0.3);
+        h.send(Command::SetEq {
+            deck: DeckId::A,
+            band: djk_core::EqBand::Low,
+            value: 0.0,
+        });
+        for _ in 0..4 {
+            e.process(&mut out, 2, None);
+        }
+        let s = *h.state.read();
+        assert_eq!(s.mixer.eq[0][0], 0.0);
+        assert!(s.master_peak[0] < 0.01, "{:?}", s.master_peak);
+    }
+
+    #[test]
     fn reports_pre_fader_channel_peaks_and_master_peaks() {
         let (mut e, mut h) = Engine::new(48_000, 2);
         load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
@@ -355,10 +406,13 @@ mod tests {
         });
         h.send(Command::Play(DeckId::A));
         let mut out = vec![0.0; 1024 * 2];
+        // Warm up first: the EQ's crossover filters overshoot briefly on the tone's abrupt
+        // start, and this test is about the steady level.
+        e.process(&mut out, 2, None);
         e.process(&mut out, 2, None);
         let s = *h.state.read();
         assert!(
-            (0.45..=0.5).contains(&s.channel_peak[0]),
+            (0.45..=0.52).contains(&s.channel_peak[0]),
             "{}",
             s.channel_peak[0]
         );
@@ -372,7 +426,7 @@ mod tests {
         e.process(&mut out, 2, None);
         let s = *h.state.read();
         assert!(
-            s.master_peak[0] > 0.4 && s.master_peak[0] <= 0.5,
+            s.master_peak[0] > 0.4 && s.master_peak[0] <= 0.52,
             "{:?}",
             s.master_peak
         );

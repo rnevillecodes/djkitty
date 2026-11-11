@@ -264,6 +264,9 @@ const KNOB_START: f32 = std::f32::consts::PI * 0.75; // 7:30 o'clock
 const KNOB_SWEEP: f32 = std::f32::consts::PI * 1.5; // to 4:30
 
 /// A rotary knob (drag up/down). `t` is normalised 0–1. Returns the new value, if changed.
+///
+/// A `bipolar` knob (like an EQ) has its neutral point at 12 o'clock: the arc grows from
+/// there in either direction and dragging snaps gently to the centre.
 pub fn knob(
     ui: &mut Ui,
     diameter: f32,
@@ -271,6 +274,7 @@ pub fn knob(
     default_t: f32,
     accent: Color32,
     enabled: bool,
+    bipolar: bool,
 ) -> (Response, Option<f32>) {
     let sense = if enabled {
         Sense::click_and_drag()
@@ -289,7 +293,12 @@ pub fn knob(
             }
             (a / KNOB_SWEEP).min(if a > KNOB_SWEEP + 0.5 { 0.0 } else { 1.0 })
         };
-        value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0), jump)
+        let v = value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0), jump);
+        if bipolar && resp.dragged() {
+            v.map(|v| if (v - 0.5).abs() < 0.015 { 0.5 } else { v })
+        } else {
+            v
+        }
     } else {
         None
     };
@@ -318,12 +327,21 @@ pub fn knob(
         r - 2.0,
         Stroke::new(3.0, Color32::from_rgb(0x07, 0x08, 0x0a)),
     );
-    if shown > 0.001 {
+    let from = if bipolar { 0.5 } else { 0.0 };
+    if (shown - from).abs() > 0.001 {
         arc(
-            KNOB_START,
+            KNOB_START + KNOB_SWEEP * from,
             KNOB_START + KNOB_SWEEP * shown,
             r - 2.0,
             Stroke::new(3.0, accent),
+        );
+    }
+    if bipolar {
+        // Centre mark at 12 o'clock.
+        let up = vec2(0.0, -1.0);
+        painter.line_segment(
+            [c + up * (r - 4.0), c + up * r],
+            Stroke::new(1.5, theme::TEXT_DIM),
         );
     }
     // Body with a highlight towards the top.

@@ -20,7 +20,8 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
   side of the mixer (or with `Shift+←` / `Shift+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
   fader, jog nudge, elapsed/remaining time, and a **scrolling waveform** plus a
   whole-track overview (click to seek while paused).
-- **Mixer:** channel faders, a crossfader, master level, a peak limiter (no harsh
+- **Mixer:** channel faders, a **3-band EQ** per channel (HI/MID/LOW, +6 dB boost to full kill), a
+  crossfader, master level, a peak limiter (no harsh
   clipping), and **headphone cue** on 4-channel devices (master on 1–2, headphones on 3–4).
 - **Controller:** Pioneer DJ / AlphaTheta **DDJ-FLX2**, with hot-plug, soft takeover and
   LED feedback. See [docs/controllers/ddj-flx2.md](docs/controllers/ddj-flx2.md) (the
@@ -86,7 +87,7 @@ status bar to see this list in the app.
 ## Not in v0.1
 
 Coming later, roughly in this order of priority: key-lock (time-stretch), sync and
-beatgrids, loops and hot cues, EQ and filters, effects, scratching (jog touch), stems,
+beatgrids, loops and hot cues, filters, effects, scratching (jog touch), stems,
 recording, learning hints, streaming services, and other controllers.
 
 ## Project layout

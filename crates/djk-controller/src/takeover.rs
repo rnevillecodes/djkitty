@@ -8,7 +8,7 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use djk_core::DeckId;
+use djk_core::{DeckId, EqBand};
 
 /// Within this distance the hardware counts as matching the app value.
 pub const PICKUP_THRESHOLD: f32 = 0.02;
@@ -19,16 +19,19 @@ pub enum FaderTarget {
     Channel(DeckId),
     Crossfader,
     Pitch(DeckId),
+    /// An EQ knob (absolute, so it needs pick-up too).
+    Eq(DeckId, EqBand),
 }
 
 impl FaderTarget {
-    pub const COUNT: usize = 5;
+    pub const COUNT: usize = 11;
 
     pub const fn index(self) -> usize {
         match self {
             FaderTarget::Channel(d) => d.index(),
             FaderTarget::Crossfader => 2,
             FaderTarget::Pitch(d) => 3 + d.index(),
+            FaderTarget::Eq(d, b) => 5 + d.index() * 3 + b.index(),
         }
     }
 
@@ -50,9 +53,22 @@ pub struct AppValues {
 impl Default for AppValues {
     fn default() -> Self {
         let v = |x: f32| AtomicU32::new(x.to_bits());
+        let eq = djk_core::EQ_NEUTRAL;
         Self {
-            // Engine defaults: faders up, crossfader centred, pitch 0.
-            values: [v(1.0), v(1.0), v(0.5), v(0.0), v(0.0)],
+            // Engine defaults: faders up, crossfader centred, pitch 0, EQ knobs centred.
+            values: [
+                v(1.0),
+                v(1.0),
+                v(0.5),
+                v(0.0),
+                v(0.0),
+                v(eq),
+                v(eq),
+                v(eq),
+                v(eq),
+                v(eq),
+                v(eq),
+            ],
             generations: Default::default(),
         }
     }
