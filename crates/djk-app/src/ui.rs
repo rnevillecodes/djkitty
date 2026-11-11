@@ -1077,17 +1077,17 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
         return;
     };
     ui.add_space(10.0);
+    // Close button on the left, clear of the scroll bar on the right edge.
     ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        if ui
+            .add(egui::Button::new(RichText::new("×").size(16.0)).frame(false))
+            .on_hover_text("Close (Esc)")
+            .clicked()
+        {
+            app.selected = None;
+        }
         section_heading(ui, "TRACK DETAILS");
-        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui
-                .add(egui::Button::new(RichText::new("×").size(16.0)).frame(false))
-                .on_hover_text("Close (Esc)")
-                .clicked()
-            {
-                app.selected = None;
-            }
-        });
     });
     ui.add_space(4.0);
     ui.add(egui::Label::new(RichText::new(&row.title).size(17.0).strong()).wrap());
