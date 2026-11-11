@@ -46,7 +46,7 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     egui::Panel::top("decks")
         .resizable(false)
         .exact_size(2.0 * lane_h + LANE_GAP + 8.0 + DECKS_ROW_HEIGHT)
-        .frame(egui::Frame::new().fill(theme::BG).inner_margin(8))
+        .frame(egui::Frame::new().fill(theme::TOP_BG).inner_margin(8))
         .show(ui, |ui| {
             waveform_lanes(app, ui, lane_h);
             ui.add_space(8.0);
@@ -165,11 +165,12 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
-/// A flat panel with a thin accent strip along the top edge.
+/// A raised panel: lighter than the section behind it, with a soft drop shadow, a crisp
+/// border and a thin accent strip along the top edge.
 fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
     let background = ui.painter().add(egui::Shape::Noop);
     let rect = egui::Frame::new()
-        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2e, 0x37)))
+        .stroke(egui::Stroke::new(1.0, theme::CARD_BORDER))
         .corner_radius(10)
         .inner_margin(egui::Margin {
             left: 10,
@@ -184,8 +185,14 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
         .response
         .rect;
 
-    // Paint the background behind the content, now that the size is known: a flat
-    // panel with the accent strip along the top edge.
+    // Paint the background behind the content, now that the size is known: shadow,
+    // panel, then the accent strip along the top edge.
+    let shadow = egui::epaint::Shadow {
+        offset: [0, 4],
+        blur: 14,
+        spread: 0,
+        color: Color32::from_black_alpha(150),
+    };
     let strip = Rect::from_min_size(
         rect.min + Vec2::new(14.0, 0.0),
         Vec2::new(rect.width() - 28.0, 2.0),
@@ -193,7 +200,8 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
     ui.painter().set(
         background,
         egui::Shape::Vec(vec![
-            egui::Shape::rect_filled(rect, 10, theme::PANEL),
+            egui::Shape::Rect(shadow.as_shape(rect, 10)),
+            egui::Shape::rect_filled(rect, 10, theme::CARD),
             egui::Shape::rect_filled(strip, 1, accent.gamma_multiply(0.85)),
         ]),
     );

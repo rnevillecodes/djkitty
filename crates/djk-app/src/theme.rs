@@ -5,6 +5,13 @@ use egui::{Color32, CornerRadius, Stroke, Visuals};
 use djk_core::DeckId;
 
 pub const BG: Color32 = Color32::from_rgb(0x12, 0x14, 0x18);
+/// Background of the top section (waveform lanes, decks and mixer), a step lighter than
+/// the rest of the window.
+pub const TOP_BG: Color32 = Color32::from_rgb(0x24, 0x28, 0x30);
+/// Raised panels (decks, mixer) in the top section: lighter than [`TOP_BG`].
+pub const CARD: Color32 = Color32::from_rgb(0x30, 0x35, 0x3f);
+/// Border of raised panels.
+pub const CARD_BORDER: Color32 = Color32::from_rgb(0x45, 0x4b, 0x57);
 pub const PANEL: Color32 = Color32::from_rgb(0x19, 0x1c, 0x22);
 pub const RAISED: Color32 = Color32::from_rgb(0x23, 0x27, 0x2f);
 pub const TEXT: Color32 = Color32::from_rgb(0xe6, 0xe8, 0xec);
