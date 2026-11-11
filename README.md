@@ -15,7 +15,8 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
   track. Results are cached, so tracks are analysed once.
 - **Sets:** create, rename and delete sets; add tracks; reorder them; see track count and
   total duration.
-- **Two decks:** load, play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
+- **Two decks:** load (with the A/B buttons, or by dragging a track from the list onto a
+  deck, its waveform or that side of the mixer), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
   fader, jog nudge, elapsed/remaining time, and a **scrolling waveform** plus a
   whole-track overview (click to seek while paused).
 - **Mixer:** channel faders, a crossfader, master level, a peak limiter (no harsh

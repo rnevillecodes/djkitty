@@ -107,7 +107,10 @@ pub fn scrolling(
 
     // Faint centre line so silence still reads as a lane.
     painter.line_segment(
-        [Pos2::new(rect.left(), mid_y), Pos2::new(rect.right(), mid_y)],
+        [
+            Pos2::new(rect.left(), mid_y),
+            Pos2::new(rect.right(), mid_y),
+        ],
         Stroke::new(1.0, theme::RAISED),
     );
 

@@ -71,7 +71,7 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
             .clone()
             .filter(|_| s.loaded);
         let cue_secs = s.loaded.then(|| s.cue / f64::from(s.track_rate.max(1)));
-        waveview::scrolling(
+        let lane = waveview::scrolling(
             ui,
             Vec2::new(width, lane_h),
             wf.as_deref(),
@@ -80,11 +80,13 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
             theme::deck_colour(deck),
             deck.label(),
             &mut app.wave_window_secs,
-        )
-        .on_hover_text(format!(
+        );
+        let rect = lane.rect;
+        lane.on_hover_text(format!(
             "Showing {:.1} s · scroll to zoom",
             app.wave_window_secs
         ));
+        track_drop_target(app, ui, rect, |_| deck);
     }
 }
 
@@ -119,7 +121,7 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
-fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) {
+fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> egui::Rect {
     egui::Frame::new()
         .fill(theme::PANEL)
         .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.25)))
@@ -128,7 +130,51 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) {
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size().max(Vec2::ZERO));
             add(ui)
-        });
+        })
+        .response
+        .rect
+}
+
+/// Drag-and-drop payload for a library track being dragged onto a deck.
+#[derive(Clone)]
+pub struct TrackDrag {
+    pub id: djk_core::TrackId,
+    pub title: String,
+}
+
+/// Make `rect` a drop target for library tracks. `deck_at` picks the deck for a pointer
+/// position (the mixer uses its left and right halves). While a track is dragged over it
+/// the target is outlined in the deck's colour; releasing loads the track.
+fn track_drop_target(
+    app: &mut DjApp,
+    ui: &Ui,
+    rect: egui::Rect,
+    deck_at: impl Fn(egui::Pos2) -> DeckId,
+) {
+    let ctx = ui.ctx();
+    let Some(drag) = egui::DragAndDrop::payload::<TrackDrag>(ctx) else {
+        return;
+    };
+    let Some(pos) = ctx.pointer_latest_pos().filter(|p| rect.contains(*p)) else {
+        return;
+    };
+    let deck = deck_at(pos);
+    let accent = theme::deck_colour(deck);
+    let painter = ctx.layer_painter(egui::LayerId::new(
+        egui::Order::Foreground,
+        egui::Id::unique("track_drop_highlight"),
+    ));
+    painter.rect_filled(rect, 8.0, accent.gamma_multiply(0.08));
+    painter.rect_stroke(
+        rect,
+        8.0,
+        egui::Stroke::new(2.0, accent),
+        egui::StrokeKind::Inside,
+    );
+    if ctx.input(|i| i.pointer.any_released()) {
+        egui::DragAndDrop::clear_payload(ctx);
+        app.load_track(deck, drag.id);
+    }
 }
 
 fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
@@ -136,7 +182,7 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
     let state = app.audio.state;
     let s = *state.deck(deck);
     let now = Instant::now();
-    card(ui, accent, |ui| {
+    let rect = card(ui, accent, |ui| {
         let width = ui.available_width();
         // Header: deck letter, title/artist, BPM/key.
         let info = app.decks[deck.index()]
@@ -330,6 +376,7 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
             });
         });
     });
+    track_drop_target(app, ui, rect, |_| deck);
 }
 
 const RESET_HINT: &str = "Ctrl+click or double-click to reset";
@@ -351,7 +398,7 @@ fn slider_value(ui: &Ui, resp: &egui::Response, value: f32, default: f32) -> Opt
 fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let state = app.audio.state;
     let m = state.mixer;
-    card(ui, theme::TEXT_DIM, |ui| {
+    let rect = card(ui, theme::TEXT_DIM, |ui| {
         // Headphone cue toggles.
         ui.columns(2, |cols| {
             for (i, deck) in DeckId::ALL.into_iter().enumerate() {
@@ -392,9 +439,13 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                 }
             }
             let label = RichText::new("Master").small().color(theme::TEXT_DIM);
-            if let Some(v) =
-                vertical_fader(&mut cols[2], m.master_level, defaults.master_level, label, true)
-            {
+            if let Some(v) = vertical_fader(
+                &mut cols[2],
+                m.master_level,
+                defaults.master_level,
+                label,
+                true,
+            ) {
                 app.audio.send(Command::SetMasterLevel(v));
             }
             let label = RichText::new("Phones").small().color(theme::TEXT_DIM);
@@ -426,7 +477,11 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                     .color(theme::TEXT_DIM),
             );
         });
-
+    });
+    // Dropping a track on the mixer loads the deck on that side.
+    let mid_x = rect.center().x;
+    track_drop_target(app, ui, rect, |p| {
+        if p.x < mid_x { DeckId::A } else { DeckId::B }
     });
 }
 
@@ -787,9 +842,10 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         .resizable(true)
         // Always use the full width and height, even with few or short rows.
         .auto_shrink(false)
-        .sense(Sense::click())
+        .sense(Sense::click_and_drag())
         .cell_layout(Layout::left_to_right(Align::Center))
-        .column(Column::exact(if in_set { 30.0 } else { 0.0 }))
+        // The outer columns are fixed, so no resize line is drawn at either edge.
+        .column(Column::exact(if in_set { 30.0 } else { 0.0 }).resizable(false))
         // Title and artist share whatever width is left, so the table always fills the
         // panel as the window or sidebar changes size.
         .column(Column::remainder().at_least(160.0).clip(true))
@@ -797,7 +853,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         .column(Column::exact(60.0))
         .column(Column::exact(50.0))
         .column(Column::exact(56.0))
-        .column(Column::exact(if in_set { 150.0 } else { 80.0 }));
+        .column(Column::exact(if in_set { 150.0 } else { 80.0 }).resizable(false));
     if app.scroll_to_selected
         && let Some(i) = selected
     {
@@ -945,6 +1001,12 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 if resp.clicked() && action.is_none() {
                     action = Some(RowAction::Select(i));
                 }
+                if !t.missing {
+                    resp.dnd_set_drag_payload(TrackDrag {
+                        id: t.id,
+                        title: t.title.clone(),
+                    });
+                }
                 resp.context_menu(|ui| {
                     for deck in DeckId::ALL {
                         if ui
@@ -977,6 +1039,26 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 });
             });
         });
+
+    // While a track is being dragged, show its title next to the pointer.
+    if let Some(drag) = egui::DragAndDrop::payload::<TrackDrag>(ui.ctx())
+        && let Some(pos) = ui.ctx().pointer_latest_pos()
+    {
+        egui::Area::new(egui::Id::unique("track_drag_ghost"))
+            .order(egui::Order::Tooltip)
+            .fixed_pos(pos + Vec2::new(14.0, 10.0))
+            .interactable(false)
+            .show(ui.ctx(), |ui| {
+                egui::Frame::popup(ui.style()).show(ui, |ui| {
+                    ui.label(RichText::new(&drag.title).strong());
+                    ui.label(
+                        RichText::new("Drop on a deck to load")
+                            .small()
+                            .color(theme::TEXT_DIM),
+                    );
+                });
+            });
+    }
 
     if let Some(key) = clicked_sort {
         app.set_sort(key);
