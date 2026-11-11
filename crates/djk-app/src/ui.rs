@@ -33,8 +33,10 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
         )
         .show(ui, |ui| status_bar(app, ui));
     // Lanes grow with the window, but never squeeze the library below its minimum.
+    // (Three quarters of the space they could take, leaving more room for the library.)
     let lane_h = ((ui.available_height() - DECKS_ROW_HEIGHT - MIN_BROWSER_HEIGHT - 40.0) / 2.0)
-        .clamp(80.0, 170.0);
+        .clamp(80.0, 170.0)
+        * 0.75;
     egui::Panel::top("decks")
         .resizable(false)
         .exact_size(2.0 * lane_h + LANE_GAP + 8.0 + DECKS_ROW_HEIGHT)
