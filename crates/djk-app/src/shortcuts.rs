@@ -60,6 +60,7 @@ pub const GLOBAL_KEYS: &[(&str, &str)] = &[
         "Load the selected track to deck A / B",
     ),
     ("Ctrl+F", "Search"),
+    ("Esc", "Clear the selection (hides track details)"),
 ];
 
 pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
@@ -108,6 +109,9 @@ pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
         if i.modifiers.command && i.key_pressed(Key::F) {
             ev.push(Ev::Search);
         }
+        if i.key_pressed(Key::Escape) {
+            ev.push(Ev::Deselect);
+        }
         (ev, i.stable_dt.min(0.1))
     });
 
@@ -140,6 +144,7 @@ pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
             Ev::Select(delta) => app.move_selection(delta),
             Ev::Load(d) => app.load_selected(d),
             Ev::Search => app.focus_search = true,
+            Ev::Deselect => app.selected = None,
         }
     }
 }
@@ -153,4 +158,5 @@ enum Ev {
     Select(i32),
     Load(DeckId),
     Search,
+    Deselect,
 }

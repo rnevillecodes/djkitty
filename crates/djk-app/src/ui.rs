@@ -46,9 +46,32 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
         });
     egui::Panel::left("sidebar")
         .resizable(true)
-        .default_size(240.0)
-        .size_range(200.0..=360.0)
+        .default_size(230.0)
+        .size_range(190.0..=360.0)
+        .frame(
+            egui::Frame::new()
+                .fill(theme::PANEL)
+                .inner_margin(egui::Margin::symmetric(10, 4)),
+        )
         .show(ui, |ui| sidebar(app, ui));
+    // Track details only take space while a track is selected.
+    if app.selected_row().is_some() {
+        egui::Panel::right("details")
+            .resizable(true)
+            .default_size(270.0)
+            .size_range(230.0..=400.0)
+            .frame(
+                egui::Frame::new()
+                    .fill(theme::PANEL)
+                    .inner_margin(egui::Margin::symmetric(12, 4)),
+            )
+            .show(ui, |ui| {
+                egui::ScrollArea::vertical()
+                    .id_salt("details")
+                    .auto_shrink([false, false])
+                    .show(ui, |ui| track_details(app, ui));
+            });
+    }
     egui::CentralPanel::default().show(ui, |ui| browser(app, ui));
     if app.show_shortcuts {
         shortcuts_window(app, ui.ctx());
@@ -739,39 +762,52 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
 // ---------------------------------------------------------------- sidebar
 
 fn sidebar(app: &mut DjApp, ui: &mut Ui) {
-    ui.add_space(6.0);
+    ui.add_space(10.0);
+    section_heading(ui, "COLLECTION");
     let lib_count = app
         .library
         .as_ref()
         .and_then(|l| l.track_count().ok())
         .unwrap_or(0);
-    if ui
-        .selectable_label(app.view == View::Library, format!("Library  ({lib_count})"))
-        .clicked()
+    if list_row(
+        ui,
+        app.view == View::Library,
+        RowIcon::Library,
+        "Library",
+        None,
+        Some(lib_count.to_string()),
+    )
+    .clicked()
     {
         app.set_view(View::Library);
     }
-    ui.add_space(8.0);
-    ui.horizontal(|ui| {
-        ui.label(
-            RichText::new("SETS")
-                .small()
-                .strong()
-                .color(theme::TEXT_DIM),
-        );
-    });
 
+    ui.add_space(14.0);
+    section_heading(ui, "SETS");
     let sets = app.sets.clone();
     let mut action: Option<SetAction> = None;
     egui::ScrollArea::vertical()
         .id_salt("sets")
-        .max_height((ui.available_height() - 210.0).max(80.0))
+        .auto_shrink([false, true])
+        .max_height((ui.available_height() - 44.0).max(60.0))
         .show(ui, |ui| {
+            if sets.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new("No sets yet. Name one below to start planning a mix.")
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
+            }
             for set in &sets {
                 if let Some((id, name)) = &mut app.renaming
                     && *id == set.id
                 {
-                    let resp = ui.text_edit_singleline(name);
+                    let resp = ui.add(
+                        egui::TextEdit::singleline(name)
+                            .desired_width(ui.available_width())
+                            .margin(egui::vec2(8.0, 8.0)),
+                    );
                     if resp.lost_focus() {
                         let commit = ui.input(|i| i.key_pressed(egui::Key::Enter));
                         action = Some(if commit {
@@ -784,37 +820,59 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
                     }
                     continue;
                 }
-                let label = format!(
-                    "{}  ·  {} · {}",
-                    set.name,
-                    set.track_count,
-                    fmt_time(set.total_secs)
+                let tracks = match set.track_count {
+                    1 => "1 track".to_string(),
+                    n => format!("{n} tracks"),
+                };
+                let subtitle = if set.track_count == 0 {
+                    "Empty".to_string()
+                } else {
+                    format!("{tracks}  ·  {}", fmt_time(set.total_secs))
+                };
+                let resp = list_row(
+                    ui,
+                    app.view == View::Set(set.id),
+                    RowIcon::Set,
+                    &set.name,
+                    Some(&subtitle),
+                    None,
                 );
-                let resp = ui.selectable_label(app.view == View::Set(set.id), label);
-                if resp.clicked() {
+                if resp.double_clicked() {
+                    action = Some(SetAction::StartRename(set.id, set.name.clone()));
+                } else if resp.clicked() {
                     action = Some(SetAction::Open(set.id));
                 }
-                resp.context_menu(|ui| {
-                    if ui.button("Rename").clicked() {
-                        action = Some(SetAction::StartRename(set.id, set.name.clone()));
-                        ui.close();
-                    }
-                    if ui.button("Delete set").clicked() {
-                        action = Some(SetAction::Delete(set.id));
-                        ui.close();
-                    }
-                });
+                resp.on_hover_text("Double-click to rename · right-click for more")
+                    .context_menu(|ui| {
+                        if ui.button("Rename").clicked() {
+                            action = Some(SetAction::StartRename(set.id, set.name.clone()));
+                            ui.close();
+                        }
+                        if ui.button("Delete set").clicked() {
+                            action = Some(SetAction::Delete(set.id));
+                            ui.close();
+                        }
+                    });
             }
         });
+
+    // New set.
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
         let resp = ui.add(
             egui::TextEdit::singleline(&mut app.new_set_name)
-                .hint_text("New set name")
-                .desired_width((ui.available_width() - 64.0).max(60.0)),
+                .hint_text("New set…")
+                .margin(egui::vec2(8.0, 5.0))
+                .desired_width((ui.available_width() - 52.0).max(60.0)),
         );
         let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        if (ui.button("Add").on_hover_text("Create set").clicked() || enter)
-            && !app.new_set_name.trim().is_empty()
+        let can_add = !app.new_set_name.trim().is_empty();
+        if (ui
+            .add_enabled(can_add, egui::Button::new("Add"))
+            .on_hover_text("Create set")
+            .clicked()
+            || enter)
+            && can_add
         {
             action = Some(SetAction::Create(std::mem::take(&mut app.new_set_name)));
         }
@@ -846,12 +904,6 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
         }
         None => {}
     }
-
-    ui.separator();
-    egui::ScrollArea::vertical()
-        .id_salt("details")
-        .auto_shrink([false, false])
-        .show(ui, |ui| track_details(app, ui));
 }
 
 enum SetAction {
@@ -863,27 +915,197 @@ enum SetAction {
     Delete(djk_library::SetId),
 }
 
-fn track_details(app: &mut DjApp, ui: &mut Ui) {
+/// Small spaced-out caps heading for a sidebar section.
+fn section_heading(ui: &mut Ui, text: &str) {
     ui.label(
-        RichText::new("TRACK DETAILS")
-            .small()
+        RichText::new(text)
+            .size(10.0)
             .strong()
+            .extra_letter_spacing(1.2)
             .color(theme::TEXT_DIM),
     );
+    ui.add_space(2.0);
+}
+
+#[derive(Clone, Copy)]
+enum RowIcon {
+    Library,
+    Set,
+}
+
+/// One-line text, cut with "…" to fit `width`.
+fn truncated(
+    ui: &Ui,
+    text: &str,
+    font: egui::FontId,
+    colour: Color32,
+    width: f32,
+) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(
+        text.to_owned(),
+        egui::TextFormat::simple(font, colour),
+    );
+    job.wrap = egui::text::TextWrapping {
+        max_width: width.max(10.0),
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    ui.painter().layout_job(job)
+}
+
+/// A navigation row: icon tile, title, optional subtitle and count badge, with hover and
+/// selected states (selected rows get a tinted fill and an accent bar).
+fn list_row(
+    ui: &mut Ui,
+    selected: bool,
+    icon: RowIcon,
+    title: &str,
+    subtitle: Option<&str>,
+    badge: Option<String>,
+) -> egui::Response {
+    let h = if subtitle.is_some() { 44.0 } else { 34.0 };
+    let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
+    let p = ui.painter();
+    let accent = theme::DECK_A;
+    if selected {
+        p.rect_filled(rect, 7, accent.gamma_multiply(0.14));
+        p.rect_filled(
+            Rect::from_min_size(rect.min + Vec2::new(0.0, 8.0), Vec2::new(3.0, h - 16.0)),
+            2,
+            accent,
+        );
+    } else if resp.hovered() {
+        p.rect_filled(rect, 7, Color32::from_white_alpha(8));
+    }
+
+    // Icon tile.
+    let tile = Rect::from_center_size(
+        egui::pos2(rect.left() + 22.0, rect.center().y),
+        Vec2::splat(24.0),
+    );
+    let ink = if selected { accent } else { theme::TEXT_DIM };
+    p.rect_filled(
+        tile,
+        6,
+        if selected {
+            accent.gamma_multiply(0.2)
+        } else {
+            theme::RAISED
+        },
+    );
+    let c = tile.center();
+    let stroke = egui::Stroke::new(1.6, ink);
+    match icon {
+        RowIcon::Library => {
+            // Stacked records.
+            for dy in [-5.0, 0.0, 5.0] {
+                p.line_segment([c + Vec2::new(-6.0, dy), c + Vec2::new(6.0, dy)], stroke);
+            }
+        }
+        RowIcon::Set => {
+            // A playlist: three lines and a note head.
+            for (dy, w) in [(-5.0, 8.0), (0.0, 8.0), (5.0, 4.0)] {
+                p.line_segment(
+                    [c + Vec2::new(-7.0, dy), c + Vec2::new(-7.0 + w, dy)],
+                    stroke,
+                );
+            }
+            p.line_segment([c + Vec2::new(5.0, -6.0), c + Vec2::new(5.0, 4.0)], stroke);
+            p.circle_filled(c + Vec2::new(3.0, 5.0), 2.4, ink);
+        }
+    }
+
+    // Badge (right-aligned count pill).
+    let mut text_right = rect.right() - 10.0;
+    if let Some(b) = badge {
+        let g = p.layout_no_wrap(b, egui::FontId::proportional(11.0), theme::TEXT_DIM);
+        let pill = Rect::from_min_size(
+            egui::pos2(
+                rect.right() - 10.0 - g.size().x - 14.0,
+                rect.center().y - 9.0,
+            ),
+            Vec2::new(g.size().x + 14.0, 18.0),
+        );
+        p.rect_filled(pill, 9, theme::RAISED);
+        p.galley(pill.center() - g.size() / 2.0, g, theme::TEXT_DIM);
+        text_right = pill.left() - 8.0;
+    }
+
+    let x = tile.right() + 10.0;
+    let width = text_right - x;
+    let title_colour = if selected {
+        theme::TEXT
+    } else {
+        theme::TEXT.gamma_multiply(0.92)
+    };
+    let tg = truncated(
+        ui,
+        title,
+        egui::FontId::proportional(14.0),
+        title_colour,
+        width,
+    );
+    match subtitle {
+        Some(sub) => {
+            let sg = truncated(
+                ui,
+                sub,
+                egui::FontId::proportional(11.0),
+                theme::TEXT_DIM,
+                width,
+            );
+            let top = rect.center().y - (tg.size().y + sg.size().y + 2.0) / 2.0;
+            let th = tg.size().y;
+            p.galley(egui::pos2(x, top), tg, title_colour);
+            p.galley(egui::pos2(x, top + th + 2.0), sg, theme::TEXT_DIM);
+        }
+        None => {
+            let y = rect.center().y - tg.size().y / 2.0;
+            p.galley(egui::pos2(x, y), tg, title_colour);
+        }
+    }
+    if resp.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
+/// Right-hand panel with everything known about the selected track.
+fn track_details(app: &mut DjApp, ui: &mut Ui) {
     let Some(row) = app.selected_row().cloned() else {
-        ui.label(RichText::new("Select a track").color(theme::TEXT_DIM));
         return;
     };
-    ui.add(egui::Label::new(RichText::new(&row.title).strong()).truncate());
-    if !row.artist.is_empty() {
-        ui.add(egui::Label::new(RichText::new(&row.artist).color(theme::TEXT_DIM)).truncate());
-    }
+    ui.add_space(10.0);
+    ui.horizontal(|ui| {
+        section_heading(ui, "TRACK DETAILS");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            if ui
+                .add(egui::Button::new(RichText::new("×").size(16.0)).frame(false))
+                .on_hover_text("Close (Esc)")
+                .clicked()
+            {
+                app.selected = None;
+            }
+        });
+    });
+    ui.add_space(4.0);
+    ui.add(egui::Label::new(RichText::new(&row.title).size(17.0).strong()).wrap());
+    ui.label(
+        RichText::new(if row.artist.is_empty() {
+            "Unknown artist"
+        } else {
+            &row.artist
+        })
+        .color(theme::TEXT_DIM),
+    );
+    ui.add_space(6.0);
     if let Some((id, bins)) = &app.details_overview
         && *id == row.id
     {
         waveview::overview(
             ui,
-            Vec2::new(ui.available_width(), 30.0),
+            Vec2::new(ui.available_width(), 44.0),
             bins,
             None,
             None,
@@ -895,9 +1117,68 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
         .library
         .as_ref()
         .and_then(|l| l.analysis(row.id).ok().flatten());
+
+    // BPM and key tiles.
+    ui.add_space(6.0);
+    let tile_w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 8.0;
+        let tile = |ui: &mut Ui, label: &str, big: String, small: String, colour: Color32| {
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(tile_w, 56.0), Sense::hover());
+            let p = ui.painter();
+            let inner = widgets::screen(p, r);
+            p.text(
+                inner.left_top() + Vec2::new(0.0, -2.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::proportional(9.0),
+                theme::TEXT_DIM,
+            );
+            p.text(
+                egui::pos2(inner.left(), inner.bottom() + 3.0),
+                egui::Align2::LEFT_BOTTOM,
+                big,
+                egui::FontId::monospace(20.0),
+                colour,
+            );
+            p.text(
+                egui::pos2(inner.right(), inner.bottom() + 1.0),
+                egui::Align2::RIGHT_BOTTOM,
+                small,
+                egui::FontId::proportional(10.0),
+                theme::TEXT_DIM,
+            );
+            resp
+        };
+        let pending = analysis.is_none();
+        let bpm = analysis.as_ref().and_then(|a| a.bpm);
+        tile(
+            ui,
+            "BPM",
+            bpm.map(|b| format!("{}", Bpm(b)))
+                .unwrap_or_else(|| if pending { "…" } else { "—" }.into()),
+            String::new(),
+            theme::TEXT,
+        );
+        let key = analysis.as_ref().and_then(|a| a.key);
+        tile(
+            ui,
+            "KEY",
+            key.map(|k| k.camelot())
+                .unwrap_or_else(|| if pending { "…" } else { "—" }.into()),
+            key.map(|k| k.standard()).unwrap_or_default(),
+            if key.is_some() {
+                theme::KEY
+            } else {
+                theme::TEXT_DIM
+            },
+        );
+    });
+
+    ui.add_space(8.0);
     egui::Grid::new("details")
         .num_columns(2)
-        .spacing([10.0, 2.0])
+        .spacing([14.0, 5.0])
         .show(ui, |ui| {
             let mut kv = |k: &str, v: String| {
                 ui.label(RichText::new(k).color(theme::TEXT_DIM));
@@ -907,25 +1188,23 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             match &analysis {
                 Some(a) => {
                     kv("Duration", fmt_time(a.duration_secs));
-                    kv(
-                        "BPM",
-                        a.bpm
-                            .map(|b| format!("{}", Bpm(b)))
-                            .unwrap_or_else(|| "unknown".into()),
-                    );
-                    kv(
-                        "Key",
-                        a.key
-                            .map(|k| format!("{}  ({})", k.camelot(), k.standard()))
-                            .unwrap_or_else(|| "unknown".into()),
-                    );
                     kv("Format", a.format.clone());
-                    kv("Sample rate", format!("{} Hz", a.sample_rate));
-                    kv("Channels", a.channels.to_string());
+                    kv(
+                        "Sample rate",
+                        format!("{:.1} kHz", f64::from(a.sample_rate) / 1000.0),
+                    );
+                    kv(
+                        "Channels",
+                        match a.channels {
+                            1 => "Mono".into(),
+                            2 => "Stereo".into(),
+                            n => n.to_string(),
+                        },
+                    );
                     kv(
                         "Bitrate",
                         if a.lossless {
-                            "lossless".into()
+                            "Lossless".into()
                         } else {
                             a.bitrate_kbps
                                 .map(|b| format!("{b} kbps"))
@@ -933,19 +1212,28 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
                         },
                     );
                 }
-                None => kv("Analysis", "pending…".into()),
+                None => kv("Analysis", "In progress…".into()),
             }
         });
     if row.missing {
+        ui.add_space(6.0);
         ui.colored_label(theme::DANGER, "File is missing");
     }
+    ui.add_space(10.0);
+    section_heading(ui, "LOCATION");
     ui.add(
         egui::Label::new(
             RichText::new(row.path.display().to_string())
                 .small()
                 .color(theme::TEXT_DIM),
         )
-        .truncate(),
+        .wrap(),
+    );
+    ui.add_space(10.0);
+    ui.label(
+        RichText::new("Drag the track onto a deck to load it, or press Shift+Left / Shift+Right.")
+            .small()
+            .color(theme::TEXT_DIM),
     );
 }
 

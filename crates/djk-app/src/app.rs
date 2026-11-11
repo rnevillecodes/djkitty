@@ -191,9 +191,9 @@ impl DjApp {
             }
             Err(e) => self.notify(format!("Library error: {e}")),
         }
-        self.selected = selected_id
-            .and_then(|id| self.rows.iter().position(|r| r.id == id))
-            .or(if self.rows.is_empty() { None } else { Some(0) });
+        // Keep the selected track if it is still listed; nothing is selected by default,
+        // so the details panel only appears once a track is picked.
+        self.selected = selected_id.and_then(|id| self.rows.iter().position(|r| r.id == id));
     }
 
     pub fn reload_sets(&mut self) {
@@ -486,8 +486,13 @@ impl DjApp {
             self.selected = None;
             return;
         }
-        let cur = self.selected.unwrap_or(0) as i64;
-        let next = (cur + i64::from(delta)).clamp(0, self.rows.len() as i64 - 1) as usize;
+        let last = self.rows.len() as i64 - 1;
+        // With nothing selected, Down starts at the top and Up at the bottom.
+        let next = match self.selected {
+            Some(cur) => (cur as i64 + i64::from(delta)).clamp(0, last),
+            None if delta < 0 => last,
+            None => 0,
+        } as usize;
         self.selected = Some(next);
         self.scroll_to_selected = true;
     }
