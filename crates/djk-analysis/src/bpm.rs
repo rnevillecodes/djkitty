@@ -5,9 +5,9 @@ use crate::dsp::{Stft, decimate_towards, to_mono};
 
 pub const MIN_BPM: f32 = 60.0;
 pub const MAX_BPM: f32 = 200.0;
-const ANALYSIS_RATE: u32 = 22_050;
-const FRAME: usize = 1024;
-const HOP: usize = 128;
+pub(crate) const ANALYSIS_RATE: u32 = 22_050;
+pub(crate) const FRAME: usize = 1024;
+pub(crate) const HOP: usize = 128;
 /// Minimum normalised autocorrelation at the chosen lag to trust the estimate.
 const MIN_PEAK: f32 = 0.2;
 /// The chosen lag must stand out from the average over the search range by this ratio.
@@ -34,7 +34,7 @@ fn centred(env: &[f32]) -> Vec<f32> {
 }
 
 /// Half-wave rectified, log-compressed spectral flux with the local mean removed.
-fn onset_envelope(signal: &[f32]) -> Vec<f32> {
+pub(crate) fn onset_envelope(signal: &[f32]) -> Vec<f32> {
     let stft = Stft::new(FRAME, HOP);
     let mut prev: Vec<f32> = vec![0.0; FRAME / 2 + 1];
     let mut flux = Vec::with_capacity(stft.frames(signal.len()));

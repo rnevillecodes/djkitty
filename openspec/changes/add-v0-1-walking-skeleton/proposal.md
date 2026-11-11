@@ -15,8 +15,11 @@ djkitty aims to be an open-source DJ app "that grows with you": simple and intui
 - Audio out through the DDJ-FLX2's built-in USB sound card: master on one stereo pair, headphones on another.
 - DDJ-FLX2 support over USB MIDI: transport buttons, faders, crossfader, EQ knobs, pitch, load and browse controls, with LED feedback for play/cue state.
 - Realtime UI: a scrolling waveform per deck with a playhead, a full-track overview with position, BPM/key readouts, and a connection status indicator.
+- Beatgrids: detected beat and bar positions drawn on the waveforms (CDJ-style beat markers, bar numbers, phrase ticks every 16 bars) with a bar.beat readout, which the DJ can correct (set bar 1, nudge, halve/double or set the tempo) and which stay corrected.
 
-Explicitly **out of scope** for v0.1: key-lock/time-stretch, beat sync, beatgrids, scratching/jog-wheel platter behaviour (jogs may only nudge), filters, effects, loops, hot cues, stems, recording, learning hints, streaming services, and controllers other than the DDJ-FLX2.
+Explicitly **out of scope** for v0.1: key-lock/time-stretch, scratching/jog-wheel platter behaviour (jogs may only nudge), filters, effects, loops, hot cues, stems, recording, learning hints, streaming services, and controllers other than the DDJ-FLX2.
+
+**Never in scope:** automatic beat sync (tempo matching, phase alignment or quantising to the grid). djkitty is a manual program for learning to DJ: beatgrids are a visual aid, and beatmatching stays the DJ's job.
 
 ## Capabilities
 
@@ -28,6 +31,7 @@ Explicitly **out of scope** for v0.1: key-lock/time-stretch, beat sync, beatgrid
 - `audio-mixing`: combining decks through channel faders and a crossfader into the master output, plus headphone cue routing to a separate output.
 - `controller-input`: discovering a supported DJ controller, translating its MIDI messages into app actions, and sending LED feedback (DDJ-FLX2 first).
 - `waveform-display`: realtime scrolling deck waveforms, full-track overviews and playhead rendering in the UI.
+- `beatgrid`: detecting where each track's beats and bars fall, drawing them on the waveforms with a bar.beat readout, and letting the DJ correct and keep them (never syncing decks).
 
 ### Modified Capabilities
 <!-- None: this is the first change and no specs exist yet. -->

@@ -70,6 +70,16 @@
 - [ ] 9.2 Run the no-controller path: unplug the DDJ-FLX2, use laptop speakers, and complete load/play/cue/pitch/fader/crossfader with mouse and keyboard; verify everything works and headphone cue shows as unavailable
 - [x] 9.3 Update the README with build/run instructions, supported formats, the DDJ-FLX2 doc link and the v0.1 out-of-scope list; verify a fresh clone builds and runs by following it
 
+## 10. Beatgrids
+
+- [x] 10.1 Add the `Beatgrid` model and grid maths to `djk-core` (first beat, bar phase with pickup bars, beat times, bar.beat, set downbeat without moving the start, nudge, tempo change around a pivot keeping the start); verify with unit tests for each
+- [x] 10.2 Implement beatgrid detection in `djk-analysis` (design §11: low-passed onset phase histogram, coarse and fine period tuning, calibrated onset delay, grid starting at the first audible beat as bar 1 beat 1); verify with tests that the grid starts within 6 ms of where the music starts at 128 and 174 BPM, a 5-second silent lead-in gets no beats, quiet hiss is not mistaken for the start, and a 5-minute track stays within 10 ms at the end
+- [x] 10.3 Store detected and user-edited grids (tempo, first beat, bar phase) in the library (schema v4, analysis version 4, edited grid on the track and winning, reset, edited tempo shown as BPM); verify with a test that an edit wins, survives re-analysis and resets to the latest detected grid
+- [x] 10.4 Draw beat lines, bar markers with numbers and phrase highlights in the scrolling lanes, phrase ticks in the overviews, and a bar.beat readout per deck; verify by screenshot on real tracks that bar lines sit on the kicks
+- [x] 10.5 Add the GRID chip and editing tools in each lane (Set 1 here with transient snap, Earlier/Later, ÷2/×2, exact tempo, Reset, drag to slide); verify on screen that each tool moves the grid as described and that reset restores the detected grid
+- [ ] 10.6 Hands-on check: on real tracks, play with the grid visible and confirm by ear that markers pass the playhead on the beat, and correct one grid with Set 1 here and a nudge
+- Beat sync is deliberately never implemented (see the `beatgrid` spec's "No automatic beat sync" requirement).
+
 ## Workflow follow-up
 
 - Archive the change with `/opsx:archive` once all tasks are done and reviewed.

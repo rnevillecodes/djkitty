@@ -4,11 +4,13 @@
 //! defined here, so the contract between the UI, the controller and the engine lives in one
 //! place. This crate has no dependencies.
 
+pub mod grid;
 pub mod music;
 
 use std::sync::Arc;
 use std::time::Instant;
 
+pub use grid::{BarBeat, Beatgrid};
 pub use music::{Bpm, Key, Mode, PitchClass};
 
 /// Number of decks in v0.1.

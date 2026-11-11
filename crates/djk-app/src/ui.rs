@@ -108,25 +108,149 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
         let peaks = d.peaks.clone().filter(|_| s.loaded);
         let bands = d.waveform.clone().filter(|_| s.loaded);
         let cue_secs = s.loaded.then(|| s.cue / f64::from(s.track_rate.max(1)));
+        let grid = d.grid.filter(|_| s.loaded).map(|g| g.grid);
+        let editing = d.grid_editing && grid.is_some();
         let lane = waveview::scrolling(
             ui,
             Vec2::new(width, lane_h),
-            peaks.as_deref(),
-            bands.as_deref(),
-            d.band_norm,
-            pos,
-            cue_secs,
-            theme::deck_colour(deck),
-            deck.label(),
+            &waveview::Lane {
+                peaks: peaks.as_deref(),
+                bands: bands.as_deref(),
+                band_norm: d.band_norm,
+                position_secs: pos,
+                cue_secs,
+                grid,
+                accent: theme::deck_colour(deck),
+                label: deck.label(),
+                editing,
+            },
             &mut app.wave_window_secs,
         );
-        let rect = lane.rect;
-        lane.on_hover_text(format!(
-            "Showing {:.1} s · scroll to zoom",
-            app.wave_window_secs
-        ));
+        let rect = lane.response.rect;
+
+        // Dragging the lane while editing slides the grid under the waveform.
+        if let Some(g) = grid
+            && editing
+        {
+            let dx = lane.response.drag_delta().x;
+            if dx != 0.0 {
+                app.set_deck_grid(deck, g.nudged(f64::from(dx) * lane.secs_per_point), false);
+            }
+            if lane.response.drag_stopped()
+                && let Some(g) = app.decks[deck.index()].grid
+            {
+                app.set_deck_grid(deck, g.grid, true);
+            }
+        }
+        let hint = if editing {
+            "Drag to slide the beatgrid · scroll to zoom"
+        } else {
+            "Scroll to zoom"
+        };
+        lane.response
+            .on_hover_text(format!("Showing {:.1} s · {hint}", app.wave_window_secs));
+        if grid.is_some() {
+            grid_tools(app, ui, deck, rect, pos, bands.as_deref());
+        }
         track_drop_target(app, ui, rect, |_| deck);
     }
+}
+
+/// The GRID chip in a lane's top-right corner and, while editing, the beatgrid tools next
+/// to it. Every edit pivots on the playhead (`pos`), so what you are looking at stays put.
+fn grid_tools(
+    app: &mut DjApp,
+    ui: &Ui,
+    deck: DeckId,
+    lane: Rect,
+    pos: f64,
+    bands: Option<&djk_analysis::Waveform>,
+) {
+    let Some(stored) = app.decks[deck.index()].grid else {
+        return;
+    };
+    let g = stored.grid;
+    let editing = app.decks[deck.index()].grid_editing;
+    let accent = theme::deck_colour(deck);
+    egui::Area::new(egui::Id::unique(("grid_tools", deck.index())))
+        .order(egui::Order::Middle)
+        .pivot(egui::Align2::RIGHT_TOP)
+        .fixed_pos(lane.right_top() + Vec2::new(-6.0, 5.0))
+        .show(ui.ctx(), |ui| {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = 4.0;
+                ui.spacing_mut().button_padding = egui::vec2(7.0, 2.0);
+                let fine = ui.input(|i| i.modifiers.shift);
+                if editing {
+                    // Right to left is awkward with egui; build left to right instead.
+                    if ui
+                        .button("Set 1 here")
+                        .on_hover_text(
+                            "Make the beat at the playhead beat 1 of a bar \
+                             (snaps to the nearest kick or transient)",
+                        )
+                        .clicked()
+                    {
+                        let t = bands.map_or(pos, |wf| waveview::snap_to_transient(wf, pos, 0.03));
+                        app.set_deck_grid(deck, g.with_downbeat_at(t), true);
+                    }
+                    let step = if fine { 0.010 } else { 0.001 };
+                    let nudge_hint = "Move the whole grid by 1 ms (Shift: 10 ms)";
+                    if ui.button("Earlier").on_hover_text(nudge_hint).clicked() {
+                        app.set_deck_grid(deck, g.nudged(-step), true);
+                    }
+                    if ui.button("Later").on_hover_text(nudge_hint).clicked() {
+                        app.set_deck_grid(deck, g.nudged(step), true);
+                    }
+                    if ui.button("÷2").on_hover_text("Halve the tempo").clicked() {
+                        app.set_deck_grid(deck, g.with_bpm(g.bpm / 2.0, pos), true);
+                    }
+                    if ui.button("×2").on_hover_text("Double the tempo").clicked() {
+                        app.set_deck_grid(deck, g.with_bpm(g.bpm * 2.0, pos), true);
+                    }
+                    let mut bpm = g.bpm;
+                    let resp = ui
+                        .add(
+                            egui::DragValue::new(&mut bpm)
+                                .speed(0.01)
+                                .range(20.0..=400.0)
+                                .fixed_decimals(2)
+                                .suffix(" BPM"),
+                        )
+                        .on_hover_text("Drag or type the grid's exact tempo");
+                    if resp.changed() {
+                        app.set_deck_grid(deck, g.with_bpm(bpm, pos), true);
+                    }
+                    if ui
+                        .add_enabled(stored.edited, egui::Button::new("Reset"))
+                        .on_hover_text("Go back to the detected beatgrid")
+                        .on_disabled_hover_text("The grid is as detected")
+                        .clicked()
+                    {
+                        app.reset_deck_grid(deck);
+                    }
+                }
+                let chip = egui::Button::new(
+                    RichText::new("GRID").size(11.0).strong().color(if editing {
+                        theme::BG
+                    } else {
+                        theme::TEXT_DIM
+                    }),
+                )
+                .fill(if editing { accent } else { theme::RAISED });
+                let tip = if editing {
+                    "Finish editing the beatgrid"
+                } else if stored.edited {
+                    "Edit the beatgrid (adjusted by you)"
+                } else {
+                    "Edit the beatgrid (as detected)"
+                };
+                if ui.add(chip).on_hover_text(tip).clicked() {
+                    let d = &mut app.decks[deck.index()];
+                    d.grid_editing = !d.grid_editing;
+                }
+            });
+        });
 }
 
 fn decks_row(app: &mut DjApp, ui: &mut Ui) {
@@ -435,6 +559,10 @@ fn deck_main(
         s.loaded.then(|| s.cue / s.track_frames.max(1) as f64),
         accent,
         s.loaded,
+        app.decks[deck.index()]
+            .grid
+            .filter(|_| s.loaded)
+            .map(|g| (g.grid, s.duration_secs())),
     );
     if let Some(frac) = ov.clicked_at {
         if s.playing {
@@ -525,6 +653,32 @@ fn deck_main(
             "REMAIN",
             egui::FontId::proportional(9.0),
             theme::TEXT_DIM,
+        );
+        // Bar and beat (e.g. 33.2), counted from bar 1 of the beatgrid.
+        let grid = app.decks[deck.index()].grid.filter(|_| s.loaded);
+        let cx = inner.center().x + 4.0;
+        p.text(
+            egui::pos2(cx, inner.top() - 2.0),
+            egui::Align2::CENTER_TOP,
+            "BAR",
+            egui::FontId::proportional(9.0),
+            theme::TEXT_DIM,
+        );
+        // "—" with no grid, or before the music (and so the grid) starts.
+        let (text, colour) = match grid.and_then(|g| g.grid.bar_beat(pos)) {
+            Some(bb) => {
+                // Beat 1 lights up, so you can feel the bar going round.
+                let colour = if bb.beat == 1 { accent } else { theme::TEXT };
+                (bb.to_string(), colour)
+            }
+            None => ("—".to_string(), theme::TEXT_DIM),
+        };
+        p.text(
+            egui::pos2(cx, inner.bottom() + 2.0),
+            egui::Align2::CENTER_BOTTOM,
+            text,
+            egui::FontId::monospace(15.0),
+            colour,
         );
         let remain = (s.duration_secs() - pos).max(0.0);
         // Warn in the last 30 s, like CDJs.
@@ -1281,6 +1435,7 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             None,
             theme::TEXT_DIM,
             false,
+            None,
         );
     }
     let analysis = app

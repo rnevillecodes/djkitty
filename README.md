@@ -20,6 +20,10 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
   side of the mixer (or with `Shift+←` / `Shift+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
   fader, jog nudge, elapsed/remaining time, and a **scrolling waveform** plus a
   whole-track overview (click to seek while paused).
+- **Beatgrids:** CDJ-style beat and bar markers on the waveforms (bar numbers, phrase
+  markers every 16 bars) and a bar.beat counter per deck. Detected automatically; click
+  **GRID** in a waveform to fix one (set bar 1, nudge, halve/double or type the tempo,
+  drag to slide). Your corrections are kept.
 - **Mixer:** channel faders, a **3-band EQ** per channel (HI/MID/LOW, +6 dB boost to full kill), a
   crossfader, master level, a peak limiter (no harsh
   clipping), and **headphone cue** on 4-channel devices (master on 1–2, headphones on 3–4).
@@ -54,7 +58,7 @@ directory, for example a throwaway test library.
 | `--test-tone [master\|headphones\|silent]` | Plays a 440 Hz tone for 3 s, then prints latency and overruns |
 | `--midi-monitor [filter]` | Logs raw MIDI from matching ports (default `DDJ-FLX2`); type hex bytes to send them |
 | `--import-folder <path>` | Imports and analyses a folder without opening the UI |
-| `--analyse [paths…]` | Prints BPM and key for files or folders (no paths: every library track, next to its stored BPM). Read-only |
+| `--analyse [paths…]` | Prints BPM, key and beatgrid for files or folders (no paths: every library track, next to its stored BPM). Never saves results or touches audio files, but opening the library applies any pending database upgrade |
 
 ```bash
 cargo run -p djk-app -- --list-audio-devices
@@ -86,9 +90,12 @@ status bar to see this list in the app.
 
 ## Not in v0.1
 
-Coming later, roughly in this order of priority: key-lock (time-stretch), sync and
-beatgrids, loops and hot cues, filters, effects, scratching (jog touch), stems,
-recording, learning hints, streaming services, and other controllers.
+Coming later, roughly in this order of priority: key-lock (time-stretch), loops and hot
+cues, filters, effects, scratching (jog touch), stems, recording, learning hints,
+streaming services, and other controllers.
+
+**Never:** automatic beat sync. djkitty is for learning to DJ by hand, so beatgrids are a
+visual aid and beatmatching stays your job.
 
 ## Project layout
 

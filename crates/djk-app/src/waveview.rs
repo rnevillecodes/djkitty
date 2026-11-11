@@ -7,6 +7,8 @@
 
 use djk_analysis::Waveform;
 use djk_analysis::waveform::Bin;
+use djk_core::Beatgrid;
+use djk_core::grid::{BARS_PER_PHRASE, BEATS_PER_BAR};
 use egui::{Color32, Mesh, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use crate::theme;
@@ -264,23 +266,79 @@ fn hairline(
     );
 }
 
-/// Scrolling waveform lane centred on a fixed playhead at `position_secs`.
+/// What a scrolling lane shows.
+pub struct Lane<'a> {
+    pub peaks: Option<&'a Peaks>,
+    /// Band data, for tinting.
+    pub bands: Option<&'a Waveform>,
+    /// Each band's typical level in the track (see [`band_norms`]).
+    pub band_norm: [f32; 3],
+    pub position_secs: f64,
+    pub cue_secs: Option<f64>,
+    pub grid: Option<Beatgrid>,
+    pub accent: Color32,
+    pub label: &'a str,
+    /// Grid editing: beat lines are brighter and the lane can be dragged to slide the grid.
+    pub editing: bool,
+}
+
+/// Interaction with a scrolling lane.
+pub struct LaneResponse {
+    pub response: egui::Response,
+    /// Track seconds per screen point at the current zoom (for dragging the grid).
+    pub secs_per_point: f64,
+}
+
+/// Snap `t` to the strongest transient (sudden rise in level) within `window` seconds,
+/// so "set bar 1 here" lands exactly on a kick when the deck is paused near it.
+pub fn snap_to_transient(wf: &Waveform, t: f64, window: f64) -> f64 {
+    let bps = f64::from(wf.bins_per_sec);
+    let level = |i: usize| {
+        wf.bins
+            .get(i)
+            .map(|b| b.iter().map(|&v| u32::from(v)).sum::<u32>())
+    };
+    let lag = (0.005 * bps).round().max(1.0) as usize;
+    let i0 = ((t - window) * bps).floor().max(lag as f64) as usize;
+    let i1 = ((t + window) * bps).ceil().max(0.0) as usize;
+    let mut best: Option<(usize, i64)> = None;
+    for i in i0..=i1 {
+        let (Some(now), Some(before)) = (level(i), level(i - lag)) else {
+            break;
+        };
+        let rise = i64::from(now) - i64::from(before);
+        if best.is_none_or(|(_, r)| rise > r) {
+            best = Some((i, rise));
+        }
+    }
+    match best {
+        // The rise completes over `lag` bins; the transient starts at its beginning.
+        Some((i, rise)) if rise > 0 => (i - lag) as f64 / bps,
+        _ => t,
+    }
+}
+
+/// Scrolling waveform lane centred on a fixed playhead.
 ///
-/// Returns the lane's response; hovering it and scrolling changes `window_secs` (zoom).
-#[allow(clippy::too_many_arguments)]
-pub fn scrolling(
-    ui: &mut Ui,
-    size: Vec2,
-    peaks: Option<&Peaks>,
-    bands: Option<&Waveform>,
-    band_norm: [f32; 3],
-    position_secs: f64,
-    cue_secs: Option<f64>,
-    accent: Color32,
-    label: &str,
-    window_secs: &mut f64,
-) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(size, Sense::hover());
+/// Hovering it and scrolling changes `window_secs` (zoom).
+pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) -> LaneResponse {
+    let Lane {
+        peaks,
+        bands,
+        band_norm,
+        position_secs,
+        cue_secs,
+        grid,
+        accent,
+        label,
+        editing,
+    } = *lane;
+    let sense = if editing {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let (rect, response) = ui.allocate_exact_size(size, sense);
 
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -348,6 +406,61 @@ pub fn scrolling(
         );
     }
 
+    // Beat grid: faint lines on every beat; bar lines with markers (and bar numbers when
+    // there is room) on every downbeat, like a CDJ.
+    if let (Some(g), Some(_)) = (grid, peaks) {
+        let x_of = |t: f64| rect.left() + ((t - start) / window) as f32 * width;
+        let bar_px = (g.period() * BEATS_PER_BAR as f64 / window) as f32 * width;
+        let boost = if editing { 1.8 } else { 1.0 };
+        for n in g.beats_between(start, start + window) {
+            let x = x_of(g.beat_time(n));
+            if g.is_downbeat(n) {
+                let bar = g.bar_of(n);
+                let phrase = bar >= 1 && (bar - 1).rem_euclid(BARS_PER_PHRASE) == 0;
+                let alpha: f32 = if phrase { 150.0 } else { 95.0 } * boost;
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    Stroke::new(1.0, Color32::from_white_alpha(alpha.min(255.0) as u8)),
+                );
+                let s = if phrase { 6.0 } else { 4.5 };
+                let ink = if phrase {
+                    theme::CUE_MARKER
+                } else {
+                    theme::TEXT
+                };
+                for (y, dir) in [(rect.top(), 1.0), (rect.bottom(), -1.0)] {
+                    painter.add(egui::Shape::convex_polygon(
+                        vec![
+                            Pos2::new(x - s, y),
+                            Pos2::new(x + s, y),
+                            Pos2::new(x, y + dir * s * 1.2),
+                        ],
+                        ink,
+                        Stroke::NONE,
+                    ));
+                }
+                if bar_px > 46.0 && bar >= 1 {
+                    painter.text(
+                        Pos2::new(x + 4.0, rect.top() + 2.0),
+                        egui::Align2::LEFT_TOP,
+                        bar.to_string(),
+                        egui::FontId::monospace(10.0),
+                        theme::TEXT_DIM,
+                    );
+                }
+            } else {
+                let alpha = (32.0 * boost) as u8;
+                painter.line_segment(
+                    [
+                        Pos2::new(x, rect.top() + 8.0),
+                        Pos2::new(x, rect.bottom() - 8.0),
+                    ],
+                    Stroke::new(1.0, Color32::from_white_alpha(alpha)),
+                );
+            }
+        }
+    }
+
     if let Some(cue) = cue_secs {
         let x = rect.left() + ((cue - start) / window) as f32 * width;
         if (rect.left()..=rect.right()).contains(&x) {
@@ -374,10 +487,19 @@ pub fn scrolling(
     painter.rect_stroke(
         rect,
         4.0,
-        Stroke::new(1.0, accent.gamma_multiply(0.45)),
+        Stroke::new(
+            if editing { 1.5 } else { 1.0 },
+            accent.gamma_multiply(if editing { 0.9 } else { 0.45 }),
+        ),
         egui::StrokeKind::Inside,
     );
-    response
+    if editing && response.hovered() {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+    LaneResponse {
+        response,
+        secs_per_point: window / f64::from(width),
+    }
 }
 
 /// Result of interacting with an overview.
@@ -387,7 +509,9 @@ pub struct OverviewResponse {
     pub response: egui::Response,
 }
 
-/// Whole-track overview with position and cue markers.
+/// Whole-track overview with position and cue markers, and phrase ticks every 16 bars
+/// when `grid` (with the track's duration) is given.
+#[allow(clippy::too_many_arguments)]
 pub fn overview(
     ui: &mut Ui,
     size: Vec2,
@@ -396,6 +520,7 @@ pub fn overview(
     cue_frac: Option<f64>,
     accent: Color32,
     clickable: bool,
+    grid: Option<(Beatgrid, f64)>,
 ) -> OverviewResponse {
     let sense = if clickable {
         Sense::click()
@@ -446,6 +571,36 @@ pub fn overview(
             );
         }
         painter.add(egui::Shape::mesh(mesh));
+    }
+    // Phrase ticks: every 16 bars, brighter every 32.
+    if let Some((g, dur)) = grid
+        && dur > 0.0
+    {
+        let mut k = 0i64;
+        loop {
+            // Phrases start at bar 1, 17, 33, …
+            let t = g.bar_time(1 + k * BARS_PER_PHRASE);
+            if t > dur {
+                break;
+            }
+            let x = rect.left() + rect.width() * (t / dur) as f32;
+            let strong = k % 2 == 0;
+            let (len, colour) = if strong {
+                (6.0, Color32::from_white_alpha(170))
+            } else {
+                (4.0, Color32::from_white_alpha(90))
+            };
+            for (y0, y1) in [
+                (rect.top(), rect.top() + len),
+                (rect.bottom() - len, rect.bottom()),
+            ] {
+                painter.line_segment(
+                    [Pos2::new(x, y0), Pos2::new(x, y1)],
+                    Stroke::new(1.0, colour),
+                );
+            }
+            k += 1;
+        }
     }
     let marker = |frac: f64, colour: Color32, width: f32| {
         let x = rect.left() + rect.width() * frac.clamp(0.0, 1.0) as f32;

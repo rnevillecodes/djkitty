@@ -135,7 +135,8 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
 /// everything that needs it. Honours `DJKITTY_DATA_DIR`.
 /// `--analyse [paths…]`: print BPM and key for files (folders are searched). With no
 /// paths, re-analyses every track in the library and shows the stored BPM alongside.
-/// Read-only: audio files are only read and nothing is saved to the library.
+/// Audio files are only read and no results are saved. Opening the library does apply
+/// any pending database upgrade (schema migration).
 pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
     // (file, stored BPM if known)
     let mut files: Vec<(std::path::PathBuf, Option<f32>)> = Vec::new();
@@ -166,7 +167,10 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
             walk(p, &mut files);
         }
     }
-    println!("{:>8}  {:>8}  {:>4}  file", "stored", "now", "key");
+    println!(
+        "{:>8}  {:>8}  {:>4}  {:>18}  file",
+        "stored", "now", "key", "grid"
+    );
     for (path, stored) in files {
         let name = path
             .file_name()
@@ -174,14 +178,17 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
             .unwrap_or_default();
         match djk_analysis::analyse_file(&path) {
             Ok(a) => println!(
-                "{:>8}  {:>8}  {:>4}  {name}",
+                "{:>8}  {:>8}  {:>4}  {:>18}  {name}",
                 stored
                     .map(|b| format!("{b:.1}"))
                     .unwrap_or_else(|| "-".into()),
                 a.bpm
-                    .map(|b| format!("{b:.1}"))
+                    .map(|b| format!("{b:.2}"))
                     .unwrap_or_else(|| "?".into()),
                 a.key.map(|k| k.camelot()).unwrap_or_else(|| "?".into()),
+                a.grid
+                    .map(|g| format!("starts at {:.3} s", g.start_secs))
+                    .unwrap_or_else(|| "no grid".into()),
             ),
             Err(e) => println!("{:>8}  {:>8}  {:>4}  {name}  ({e})", "-", "error", ""),
         }

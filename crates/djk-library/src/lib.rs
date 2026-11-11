@@ -21,9 +21,13 @@ pub use schema::LATEST as SCHEMA_VERSION;
 ///
 /// 2: BPM detection scores whole beat combs over a 90–180 BPM range (fixes drum & bass
 ///    at 174 BPM reading as 116).
-pub const ANALYSIS_VERSION: i64 = 2;
+/// 3: beatgrid detection (phase, downbeat and fine-tuned tempo).
+/// 4: beatgrids start at the first audible beat (bar 1 beat 1).
+pub const ANALYSIS_VERSION: i64 = 4;
 pub use sets::{SetId, SetSummary};
-pub use tracks::{AnalysisRecord, SortKey, TrackQuery, TrackRow, matches_search as tracks_match};
+pub use tracks::{
+    AnalysisRecord, SortKey, StoredGrid, TrackQuery, TrackRow, matches_search as tracks_match,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum LibraryError {

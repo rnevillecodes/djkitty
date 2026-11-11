@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use djk_core::{Key, TrackId};
+use djk_core::{Beatgrid, Key, TrackId};
 use rusqlite::{OptionalExtension, Row, params};
 
 use crate::{Library, LibraryError, Result, file_stamp};
@@ -34,6 +34,16 @@ pub struct AnalysisRecord {
     pub lossless: bool,
     pub bpm: Option<f32>,
     pub key: Option<Key>,
+    /// The detected beatgrid (a user-edited grid is stored separately and wins).
+    pub grid: Option<Beatgrid>,
+}
+
+/// A track's beatgrid and whether the user edited it.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StoredGrid {
+    pub grid: Beatgrid,
+    /// True when the user adjusted it; re-analysis then leaves it alone.
+    pub edited: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -55,8 +65,9 @@ pub struct TrackQuery {
     pub descending: bool,
 }
 
-const TRACK_COLUMNS: &str = "t.id, t.path, t.title, t.artist, a.bpm, a.key, a.duration_ms, \
-     t.missing, a.track_id IS NOT NULL";
+/// A user-edited grid's tempo takes precedence over the detected BPM.
+const TRACK_COLUMNS: &str = "t.id, t.path, t.title, t.artist, COALESCE(t.user_grid_bpm, a.bpm), \
+     a.key, a.duration_ms, t.missing, a.track_id IS NOT NULL";
 
 pub(crate) fn track_from_row(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
     let key: Option<i64> = r.get(5)?;
@@ -72,6 +83,11 @@ pub(crate) fn track_from_row(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         missing: r.get(7)?,
         analysed: r.get(8)?,
     })
+}
+
+/// A grid from its stored columns (tempo, first beat, bar phase), if all are present.
+fn grid_from(bpm: Option<f64>, start: Option<f64>, downbeat: Option<i64>) -> Option<Beatgrid> {
+    Some(Beatgrid::with_phase(bpm?, start?, downbeat.unwrap_or(0)))
 }
 
 pub(crate) fn select_tracks_sql(tail: &str) -> String {
@@ -218,10 +234,12 @@ impl Library {
         Ok(self
             .conn
             .query_row(
-                "SELECT duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key \
+                "SELECT duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key, \
+                        grid_bpm, grid_start, grid_downbeat \
                  FROM analysis WHERE track_id = ?1",
                 [id.0],
                 |r| {
+                    let grid = grid_from(r.get(8)?, r.get(9)?, r.get(10)?);
                     Ok(AnalysisRecord {
                         duration_secs: r.get::<_, i64>(0)? as f64 / 1000.0,
                         format: r.get(1)?,
@@ -233,10 +251,77 @@ impl Library {
                         key: r
                             .get::<_, Option<i64>>(7)?
                             .and_then(|k| Key::from_code(k as u8)),
+                        grid,
                     })
                 },
             )
             .optional()?)
+    }
+
+    /// The track's beatgrid: the user's edited grid if there is one, otherwise the
+    /// detected one. `None` until analysed (or when no beat was found).
+    pub fn beatgrid(&self, id: TrackId) -> Result<Option<StoredGrid>> {
+        type Cols = (
+            Option<f64>,
+            Option<f64>,
+            Option<i64>,
+            Option<f64>,
+            Option<f64>,
+            Option<i64>,
+        );
+        let row: Option<Cols> = self
+            .conn
+            .query_row(
+                "SELECT t.user_grid_bpm, t.user_grid_start, t.user_grid_downbeat, \
+                        a.grid_bpm, a.grid_start, a.grid_downbeat \
+                 FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id WHERE t.id = ?1",
+                [id.0],
+                |r| {
+                    Ok((
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((ub, us, ud, db, ds, dd)) = row else {
+            return Ok(None);
+        };
+        Ok(match (grid_from(ub, us, ud), grid_from(db, ds, dd)) {
+            (Some(grid), _) => Some(StoredGrid { grid, edited: true }),
+            (None, Some(grid)) => Some(StoredGrid {
+                grid,
+                edited: false,
+            }),
+            (None, None) => None,
+        })
+    }
+
+    /// Save a user-adjusted beatgrid. It survives re-analysis until reset.
+    pub fn set_beatgrid(&mut self, id: TrackId, grid: Beatgrid) -> Result<()> {
+        let n = self.conn.execute(
+            "UPDATE tracks SET user_grid_bpm = ?2, user_grid_start = ?3, user_grid_downbeat = ?4 \
+             WHERE id = ?1",
+            params![id.0, grid.bpm, grid.start_secs, grid.first_downbeat],
+        )?;
+        if n == 0 {
+            return Err(LibraryError::NotFound);
+        }
+        Ok(())
+    }
+
+    /// Drop the user's grid edits and go back to the detected grid.
+    pub fn reset_beatgrid(&mut self, id: TrackId) -> Result<()> {
+        self.conn.execute(
+            "UPDATE tracks SET user_grid_bpm = NULL, user_grid_start = NULL, \
+             user_grid_downbeat = NULL WHERE id = ?1",
+            [id.0],
+        )?;
+        Ok(())
     }
 
     /// Store analysis results, recording the file stamp they were computed from.
@@ -249,8 +334,8 @@ impl Library {
         self.conn.execute(
             "INSERT OR REPLACE INTO analysis \
              (track_id, duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key, \
-              source_size, source_mtime, version) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+              source_size, source_mtime, version, grid_bpm, grid_start, grid_downbeat) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
             params![
                 id.0,
                 (rec.duration_secs * 1000.0).round() as i64,
@@ -264,6 +349,9 @@ impl Library {
                 stamp.0,
                 stamp.1,
                 crate::ANALYSIS_VERSION,
+                rec.grid.map(|g| g.bpm),
+                rec.grid.map(|g| g.start_secs),
+                rec.grid.map(|g| g.first_downbeat),
             ],
         )?;
         self.conn.execute(

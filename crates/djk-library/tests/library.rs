@@ -3,7 +3,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use djk_core::{Key, Mode, TrackId};
+use djk_core::{Beatgrid, Key, Mode, TrackId};
 use djk_library::{AnalysisRecord, Library, SCHEMA_VERSION, SortKey, TrackQuery};
 
 fn fixture(name: &str) -> PathBuf {
@@ -27,6 +27,7 @@ fn record(secs: f64, bpm: Option<f32>, key: Option<Key>) -> AnalysisRecord {
         lossless: false,
         bpm,
         key,
+        grid: None,
     }
 }
 
@@ -403,6 +404,83 @@ fn results_from_an_older_analysis_version_are_redone() {
             .iter()
             .any(|(t, _)| *t == id)
     );
+}
+
+#[test]
+fn a_library_on_the_first_beatgrid_schema_upgrades() {
+    // A library created at schema v3 (the first beatgrid columns) gets the v4 columns.
+    let tmp = tempfile::tempdir().unwrap();
+    let dir = tmp.path().join("data");
+    std::fs::create_dir_all(&dir).unwrap();
+    {
+        let db = rusqlite::Connection::open(dir.join("library.db")).unwrap();
+        db.execute_batch(
+            "CREATE TABLE tracks (id INTEGER PRIMARY KEY, path TEXT NOT NULL UNIQUE, \
+               title TEXT NOT NULL, artist TEXT NOT NULL DEFAULT '', size INTEGER NOT NULL DEFAULT 0, \
+               mtime INTEGER NOT NULL DEFAULT 0, missing INTEGER NOT NULL DEFAULT 0, \
+               added_at INTEGER NOT NULL DEFAULT 0, user_grid_bpm REAL, user_grid_anchor REAL);
+             CREATE TABLE analysis (track_id INTEGER PRIMARY KEY, duration_ms INTEGER NOT NULL, \
+               format TEXT NOT NULL, sample_rate INTEGER NOT NULL, channels INTEGER NOT NULL, \
+               bitrate INTEGER, lossless INTEGER NOT NULL DEFAULT 0, bpm REAL, key INTEGER, \
+               source_size INTEGER NOT NULL, source_mtime INTEGER NOT NULL, \
+               analysed_at INTEGER NOT NULL DEFAULT 0, version INTEGER NOT NULL DEFAULT 1, \
+               grid_bpm REAL, grid_anchor REAL);
+             CREATE TABLE sets (id INTEGER PRIMARY KEY, name TEXT NOT NULL);
+             CREATE TABLE set_tracks (set_id INTEGER NOT NULL, track_id INTEGER NOT NULL, \
+               position INTEGER NOT NULL, UNIQUE (set_id, track_id));
+             PRAGMA user_version = 3;",
+        )
+        .unwrap();
+    }
+    let mut lib = library(tmp.path());
+    assert_eq!(lib.schema_version().unwrap(), SCHEMA_VERSION);
+    let summary = {
+        let music = tmp.path().join("music");
+        copy("tone.mp3", &music.join("a.mp3"));
+        lib.import_folder(&music, |_| {}).unwrap()
+    };
+    let id = summary.tracks[0];
+    lib.set_beatgrid(id, Beatgrid::with_phase(128.0, 0.5, 1))
+        .unwrap();
+    assert_eq!(
+        lib.beatgrid(id).unwrap().unwrap().grid,
+        Beatgrid::with_phase(128.0, 0.5, 1)
+    );
+}
+
+#[test]
+fn edited_beatgrids_win_and_survive_reanalysis() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = library_with_titles(tmp.path());
+    let id = ids(&lib)[0];
+    assert_eq!(lib.beatgrid(id).unwrap(), None);
+
+    // Analysis stores the detected grid.
+    let detected = Beatgrid::new(174.0, 0.21);
+    let mut rec = record(60.0, Some(174.0), None);
+    rec.grid = Some(detected);
+    lib.save_analysis(id, &rec, (0, 0)).unwrap();
+    let g = lib.beatgrid(id).unwrap().unwrap();
+    assert_eq!((g.grid, g.edited), (detected, false));
+
+    // The user moves bar 1 and fine-tunes the tempo.
+    let edited = Beatgrid::with_phase(174.05, 0.3, 2);
+    lib.set_beatgrid(id, edited).unwrap();
+    let g = lib.beatgrid(id).unwrap().unwrap();
+    assert_eq!((g.grid, g.edited), (edited, true));
+    // The edited tempo shows in the track list.
+    let row = lib.track(id).unwrap();
+    assert!((row.bpm.unwrap() - 174.05).abs() < 1e-3);
+
+    // Re-analysis replaces the detected grid but leaves the edit alone.
+    rec.grid = Some(Beatgrid::new(173.9, 0.1));
+    lib.save_analysis(id, &rec, (0, 0)).unwrap();
+    assert_eq!(lib.beatgrid(id).unwrap().unwrap().grid, edited);
+
+    // Reset goes back to the (latest) detected grid.
+    lib.reset_beatgrid(id).unwrap();
+    let g = lib.beatgrid(id).unwrap().unwrap();
+    assert_eq!((g.grid, g.edited), (Beatgrid::new(173.9, 0.1), false));
 }
 
 #[test]

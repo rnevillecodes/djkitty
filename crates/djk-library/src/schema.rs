@@ -47,6 +47,27 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE analysis ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
     "#,
+    // v3: beatgrids, first version (tempo and an anchor downbeat). Superseded by v4;
+    // `grid_anchor` and `user_grid_anchor` are no longer used. Kept as-is because
+    // libraries already at v3 must not have it change under them.
+    r#"
+    ALTER TABLE analysis ADD COLUMN grid_bpm REAL;
+    ALTER TABLE analysis ADD COLUMN grid_anchor REAL;
+    ALTER TABLE tracks ADD COLUMN user_grid_bpm REAL;
+    ALTER TABLE tracks ADD COLUMN user_grid_anchor REAL;
+    "#,
+    // v4: beatgrids start at their first beat and record which beat starts bar 1. The
+    // detected grid lives with the analysis (replaced on re-analysis); the user's edited
+    // grid lives on the track, so re-analysis never overwrites it.
+    r#"
+    ALTER TABLE analysis ADD COLUMN grid_start REAL;
+    ALTER TABLE analysis ADD COLUMN grid_downbeat INTEGER;
+    ALTER TABLE tracks ADD COLUMN user_grid_start REAL;
+    ALTER TABLE tracks ADD COLUMN user_grid_downbeat INTEGER;
+    -- Old-format grid edits had no start or bar phase; drop them so the detected grid
+    -- shows (none were made outside development).
+    UPDATE tracks SET user_grid_bpm = NULL;
+    "#,
 ];
 
 /// Apply any migrations newer than the database's `user_version`.

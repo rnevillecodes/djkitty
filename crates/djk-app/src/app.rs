@@ -29,6 +29,10 @@ pub struct DeckUi {
     pub peaks: Option<Arc<Peaks>>,
     /// Each band's typical level in this track, for tinting (see `waveview::band_norms`).
     pub band_norm: [f32; 3],
+    /// The track's beatgrid (user-edited or detected), if it has one.
+    pub grid: Option<djk_library::StoredGrid>,
+    /// Whether the grid editing tools are open in this deck's waveform lane.
+    pub grid_editing: bool,
     pub overview: Vec<WaveCol>,
     pub loading: bool,
     pub message: Option<(String, Instant)>,
@@ -264,6 +268,43 @@ impl DjApp {
         self.rows_dirty = true;
     }
 
+    // ---- Beatgrid editing. Grids are a visual aid for beatmatching by ear and eye;
+    // djkitty never syncs decks. Edits are saved in the library, never in the audio file.
+
+    /// Replace a deck's grid with an edited one. With `save`, it is stored for the track
+    /// (live drags pass `false` and save once when the drag ends).
+    pub fn set_deck_grid(&mut self, deck: DeckId, grid: djk_core::Beatgrid, save: bool) {
+        let d = &mut self.decks[deck.index()];
+        d.grid = Some(djk_library::StoredGrid { grid, edited: true });
+        let Some(id) = d.track.as_ref().map(|t| t.id) else {
+            return;
+        };
+        if save {
+            self.with_library(|lib| lib.set_beatgrid(id, grid));
+            // Keep the deck's BPM readout in step with the edited tempo.
+            if let Some(lib) = &self.library
+                && let Ok(row) = lib.track(id)
+            {
+                self.decks[deck.index()].track = Some(row);
+            }
+        }
+    }
+
+    /// Drop a deck's grid edits and go back to the detected grid.
+    pub fn reset_deck_grid(&mut self, deck: DeckId) {
+        let Some(id) = self.decks[deck.index()].track.as_ref().map(|t| t.id) else {
+            return;
+        };
+        self.with_library(|lib| lib.reset_beatgrid(id));
+        if let Some(lib) = &self.library {
+            let d = &mut self.decks[deck.index()];
+            d.grid = lib.beatgrid(id).ok().flatten();
+            if let Ok(row) = lib.track(id) {
+                d.track = Some(row);
+            }
+        }
+    }
+
     // ---- Track management. None of this touches audio files on disk: removing only
     // changes the library database (and drops djkitty's own cached waveform).
 
@@ -441,6 +482,7 @@ impl DjApp {
                     && changed.contains(&t.id)
                     && let Ok(row) = lib.track(t.id)
                 {
+                    d.grid = lib.beatgrid(row.id).ok().flatten();
                     d.track = Some(row);
                 }
             }
@@ -479,12 +521,15 @@ impl DjApp {
             }
         };
         let track = lib.track(id).ok();
+        let grid = lib.beatgrid(id).ok().flatten();
         let cache = lib.waveform_path(id);
         let ui = &mut self.decks[deck.index()];
         ui.loading = true;
         ui.message = None;
         ui.token = id.0 as u64;
         ui.track = track;
+        ui.grid = grid;
+        ui.grid_editing = false;
         self.loader.request(LoadJob {
             deck,
             path,
