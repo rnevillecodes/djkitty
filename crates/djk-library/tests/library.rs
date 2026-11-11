@@ -358,6 +358,75 @@ fn remove_and_reorder_persist() {
     assert_eq!(lib.track_count().unwrap(), 4);
 }
 
+/// Byte-for-byte snapshot of every file under `dir`, to prove nothing was edited.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut out = Vec::new();
+    for entry in fs::read_dir(dir).unwrap() {
+        let p = entry.unwrap().path();
+        if p.is_dir() {
+            out.extend(snapshot(&p));
+        } else {
+            out.push((p.clone(), fs::read(&p).unwrap()));
+        }
+    }
+    out.sort();
+    out
+}
+
+#[test]
+fn removing_from_library_leaves_audio_files_untouched() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = library_with_titles(tmp.path());
+    let music = tmp.path().join("music");
+    let before = snapshot(&music);
+    let all = ids(&lib);
+    let set_a = lib.create_set("A").unwrap();
+    let set_b = lib.create_set("B").unwrap();
+    for set in [set_a, set_b] {
+        lib.add_to_set(set, all[0]).unwrap();
+        lib.add_to_set(set, all[1]).unwrap();
+    }
+    lib.save_analysis(all[0], &record(60.0, Some(120.0), None), (0, 0))
+        .unwrap();
+    assert_eq!(lib.sets_containing(all[0]).unwrap(), 2);
+
+    lib.remove_track(all[0]).unwrap();
+
+    // Gone from the library, its analysis and every set...
+    assert_eq!(lib.track_count().unwrap(), 3);
+    assert!(lib.track(all[0]).is_err());
+    assert!(lib.analysis(all[0]).unwrap().is_none());
+    for set in [set_a, set_b] {
+        let order: Vec<_> = lib.set_tracks(set).unwrap().iter().map(|t| t.id).collect();
+        assert_eq!(order, vec![all[1]]);
+    }
+    // ...but every audio file is still there, byte for byte.
+    assert_eq!(snapshot(&music), before);
+
+    // Importing the folder again brings it back.
+    let summary = lib.import_folder(&music, |_| {}).unwrap();
+    assert_eq!(summary.added, 1);
+    assert_eq!(lib.track_count().unwrap(), 4);
+}
+
+#[test]
+fn removing_from_a_set_keeps_the_track_and_its_file() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = library_with_titles(tmp.path());
+    let music = tmp.path().join("music");
+    let before = snapshot(&music);
+    let all = ids(&lib);
+    let set = lib.create_set("Set").unwrap();
+    lib.add_to_set(set, all[2]).unwrap();
+
+    lib.remove_from_set(set, all[2]).unwrap();
+
+    assert!(lib.set_tracks(set).unwrap().is_empty());
+    assert_eq!(lib.track_count().unwrap(), 4);
+    assert!(lib.track(all[2]).is_ok());
+    assert_eq!(snapshot(&music), before);
+}
+
 #[test]
 fn set_summary_totals_duration() {
     let tmp = tempfile::tempdir().unwrap();

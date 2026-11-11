@@ -61,11 +61,15 @@ pub const GLOBAL_KEYS: &[(&str, &str)] = &[
     ),
     ("Ctrl+F", "Search the library (or filter the open set)"),
     ("Esc", "Clear the selection (hides track details)"),
+    (
+        "Del",
+        "Remove the selected track from the set, or from the library (files are never deleted)",
+    ),
 ];
 
 pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
-    // Never steal keys from a focused text field.
-    if ctx.egui_wants_keyboard_input() {
+    // Never steal keys from a focused text field or an open dialog.
+    if ctx.egui_wants_keyboard_input() || app.new_set_dialog || app.remove_prompt.is_some() {
         return;
     }
     let (events, dt) = ctx.input(|i| {
@@ -112,6 +116,9 @@ pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
         if i.key_pressed(Key::Escape) {
             ev.push(Ev::Deselect);
         }
+        if i.key_pressed(Key::Delete) {
+            ev.push(Ev::Remove);
+        }
         (ev, i.stable_dt.min(0.1))
     });
 
@@ -145,6 +152,7 @@ pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
             Ev::Load(d) => app.load_selected(d),
             Ev::Search => app.focus_search = true,
             Ev::Deselect => app.selected = None,
+            Ev::Remove => app.remove_selected(),
         }
     }
 }
@@ -159,4 +167,5 @@ enum Ev {
     Load(DeckId),
     Search,
     Deselect,
+    Remove,
 }

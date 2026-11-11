@@ -151,12 +151,27 @@ impl Library {
             as usize)
     }
 
-    /// Remove a track entirely (e.g. it turned out not to be decodable).
+    /// Remove a track from the library: its row, its analysis and its place in every set.
+    ///
+    /// The audio file itself is never touched. The only file removed is djkitty's own
+    /// cached waveform for the track, which lives in the library's data folder.
+    /// Importing the file again adds it back.
     pub fn remove_track(&mut self, id: TrackId) -> Result<()> {
         self.conn
             .execute("DELETE FROM tracks WHERE id = ?1", [id.0])?;
-        let _ = std::fs::remove_file(self.waveform_path(id));
+        let cache = self.waveform_path(id);
+        debug_assert!(cache.starts_with(&self.cache_dir));
+        let _ = std::fs::remove_file(cache);
         Ok(())
+    }
+
+    /// How many sets contain the track.
+    pub fn sets_containing(&self, id: TrackId) -> Result<usize> {
+        Ok(self.conn.query_row(
+            "SELECT COUNT(*) FROM set_tracks WHERE track_id = ?1",
+            [id.0],
+            |r| r.get::<_, i64>(0),
+        )? as usize)
     }
 
     /// Re-check whether each track's file exists and update its `missing` flag. Returns

@@ -81,6 +81,9 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     if app.new_set_dialog {
         new_set_dialog(app, ui.ctx());
     }
+    if app.remove_prompt.is_some() {
+        remove_dialog(app, ui.ctx());
+    }
 }
 
 // ---------------------------------------------------------------- decks + mixer
@@ -966,6 +969,63 @@ fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
     }
 }
 
+/// "Remove from library?" confirmation. Makes clear the audio file is never deleted.
+fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
+    let Some(prompt) = &app.remove_prompt else {
+        return;
+    };
+    let (id, title, sets) = (prompt.id, prompt.title.clone(), prompt.sets);
+    let mut remove = false;
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::unique("remove_dialog")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(RichText::new("Remove from library?").size(18.0).strong());
+        ui.add_space(6.0);
+        let where_from = match sets {
+            0 => "your library".to_string(),
+            1 => "your library and from 1 set".to_string(),
+            n => format!("your library and from {n} sets"),
+        };
+        ui.label(format!("“{title}” will be removed from {where_from}."));
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new(
+                "The audio file stays on your disk; nothing is deleted. \
+                 Importing it again adds it back.",
+            )
+            .small()
+            .color(theme::TEXT_DIM),
+        );
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let confirm = egui::Button::new(RichText::new("Remove").strong())
+                .fill(theme::DANGER.gamma_multiply(0.45))
+                .min_size(Vec2::new(90.0, 28.0));
+            if ui.add(confirm).clicked() {
+                remove = true;
+            }
+            if ui
+                .add(egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0)))
+                .clicked()
+            {
+                close = true;
+            }
+        });
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            remove = true;
+        }
+    });
+    if modal.should_close() {
+        close = true;
+    }
+    if remove {
+        app.remove_prompt = None;
+        app.remove_from_library(id);
+    } else if close {
+        app.remove_prompt = None;
+    }
+}
+
 /// Small spaced-out caps heading for a sidebar section.
 fn section_heading(ui: &mut Ui, text: &str) {
     ui.label(
@@ -1379,6 +1439,7 @@ enum RowAction {
     Load(DeckId, usize),
     AddToSet(djk_library::SetId, usize),
     RemoveFromSet(usize),
+    RemoveFromLibrary(usize),
     Move(usize, usize),
 }
 
@@ -1605,8 +1666,28 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                             }
                         }
                     });
-                    if in_set && ui.button("Remove from set").clicked() {
+                    ui.separator();
+                    // Neither option touches the audio file on disk.
+                    if in_set
+                        && ui
+                            .add(egui::Button::new("Remove from set").shortcut_text("Del"))
+                            .clicked()
+                    {
                         action = Some(RowAction::RemoveFromSet(i));
+                        ui.close();
+                    }
+                    let lib_remove = egui::Button::new("Remove from library…");
+                    let lib_remove = if in_set {
+                        lib_remove
+                    } else {
+                        lib_remove.shortcut_text("Del")
+                    };
+                    if ui
+                        .add(lib_remove)
+                        .on_hover_text("Takes it out of djkitty; the file stays on your disk")
+                        .clicked()
+                    {
+                        action = Some(RowAction::RemoveFromLibrary(i));
                         ui.close();
                     }
                 });
@@ -1663,11 +1744,10 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 format!("Already in “{name}”")
             });
         }
-        Some(RowAction::RemoveFromSet(i)) => {
-            if let View::Set(set) = app.view {
-                let id = app.rows[i].id;
-                app.with_library(|lib| lib.remove_from_set(set, id));
-            }
+        Some(RowAction::RemoveFromSet(i)) => app.remove_from_open_set(i),
+        Some(RowAction::RemoveFromLibrary(i)) => {
+            let id = app.rows[i].id;
+            app.ask_remove_from_library(id);
         }
         Some(RowAction::Move(from, to)) => {
             if let View::Set(set) = app.view {

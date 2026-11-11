@@ -9,7 +9,8 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 
 - **Library:** import a music folder (recursively), pick individual files, or **drag and drop files and folders**
   onto the window (dropping while a set is open also adds them to that set); search, and sort by title, artist,
-  BPM, key or duration. Missing files are flagged.
+  BPM, key or duration. Missing files are flagged. Remove tracks from a set or from the library (right-click or
+  `Del`); **djkitty never edits, moves or deletes your audio files**.
 - **Analysis in the background:** duration, format, sample rate, channels, bitrate,
   **BPM**, **key** (Camelot and standard notation) and a **3-band waveform** for every
   track. Results are cached, so tracks are analysed once.
@@ -79,6 +80,7 @@ status bar to see this list in the app.
 | `Shift+←` / `Shift+→` | Load the selected track to deck A / B |
 | `Ctrl+F` | Search the library (or filter the open set) |
 | `Esc` | Clear the selection (hides the track details panel) |
+| `Del` | Remove the selected track from the open set, or from the library (asks first; files are never deleted) |
 
 ## Not in v0.1
 

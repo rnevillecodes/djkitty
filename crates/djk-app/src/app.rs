@@ -33,6 +33,14 @@ pub struct DeckUi {
     pub cue_held: bool,
 }
 
+/// What the "Remove from library?" dialog is asking about.
+pub struct RemovePrompt {
+    pub id: TrackId,
+    pub title: String,
+    /// Number of sets the track is in (it leaves them too).
+    pub sets: usize,
+}
+
 /// Which list the browser shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -69,6 +77,8 @@ pub struct DjApp {
     pub new_set_name: String,
     /// Whether the "New set" dialog is open.
     pub new_set_dialog: bool,
+    /// A pending "Remove from library?" confirmation.
+    pub remove_prompt: Option<RemovePrompt>,
     pub import: Option<ImportJob>,
     pub notice: Option<(String, Instant)>,
     pub output_devices: Vec<String>,
@@ -135,6 +145,7 @@ impl DjApp {
             renaming: None,
             new_set_name: String::new(),
             new_set_dialog: false,
+            remove_prompt: None,
             import: None,
             notice: None,
             output_devices: Vec::new(),
@@ -249,6 +260,62 @@ impl DjApp {
         }
         self.reload_sets();
         self.rows_dirty = true;
+    }
+
+    // ---- Track management. None of this touches audio files on disk: removing only
+    // changes the library database (and drops djkitty's own cached waveform).
+
+    /// Ask to remove a track from the library (opens a confirmation dialog).
+    pub fn ask_remove_from_library(&mut self, id: TrackId) {
+        let Some(lib) = &self.library else { return };
+        let title = lib.track(id).map(|t| t.title).unwrap_or_default();
+        let sets = lib.sets_containing(id).unwrap_or(0);
+        self.remove_prompt = Some(RemovePrompt { id, title, sets });
+    }
+
+    /// Remove a track from the library (and every set). The file stays on disk.
+    pub fn remove_from_library(&mut self, id: TrackId) {
+        let title = self
+            .library
+            .as_ref()
+            .and_then(|l| l.track(id).ok())
+            .map(|t| t.title)
+            .unwrap_or_default();
+        self.with_library(|lib| lib.remove_track(id));
+        if self
+            .details_overview
+            .as_ref()
+            .is_some_and(|(d, _)| *d == id)
+        {
+            self.details_overview = None;
+        }
+        self.notify(format!(
+            "Removed “{title}” from the library (the file is still on your disk)"
+        ));
+    }
+
+    /// Remove the track at `row` from the open set. It stays in the library.
+    pub fn remove_from_open_set(&mut self, row: usize) {
+        let View::Set(set) = self.view else { return };
+        let Some(track) = self.rows.get(row).cloned() else {
+            return;
+        };
+        self.with_library(|lib| lib.remove_from_set(set, track.id));
+        self.notify(format!("Removed “{}” from this set", track.title));
+    }
+
+    /// The Delete key: remove the selected track from the open set, or (in the library)
+    /// ask to remove it from the library.
+    pub fn remove_selected(&mut self) {
+        let Some(row) = self.selected else { return };
+        match self.view {
+            View::Set(_) => self.remove_from_open_set(row),
+            View::Library => {
+                if let Some(id) = self.rows.get(row).map(|r| r.id) {
+                    self.ask_remove_from_library(id);
+                }
+            }
+        }
     }
 
     /// Import files and/or folders on a background thread. With `into_set`, the imported
