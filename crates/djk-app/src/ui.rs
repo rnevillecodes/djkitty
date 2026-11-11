@@ -76,6 +76,9 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     if app.show_shortcuts {
         shortcuts_window(app, ui.ctx());
     }
+    if app.new_set_dialog {
+        new_set_dialog(app, ui.ctx());
+    }
 }
 
 // ---------------------------------------------------------------- decks + mixer
@@ -799,7 +802,22 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     }
 
     ui.add_space(14.0);
-    section_heading(ui, "SETS");
+    ui.horizontal(|ui| {
+        section_heading(ui, "SETS");
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let plus = ui
+                .add(
+                    egui::Button::new(RichText::new("+").size(16.0).strong())
+                        .min_size(Vec2::new(24.0, 22.0))
+                        .corner_radius(6),
+                )
+                .on_hover_text("New set");
+            if plus.clicked() {
+                app.new_set_name.clear();
+                app.new_set_dialog = true;
+            }
+        });
+    });
     // Filter at the top of the list (once there is something to filter).
     if !app.sets.is_empty() {
         ui.add(
@@ -821,12 +839,12 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     egui::ScrollArea::vertical()
         .id_salt("sets")
         .auto_shrink([false, true])
-        .max_height((ui.available_height() - 44.0).max(60.0))
+        .max_height(ui.available_height().max(60.0))
         .show(ui, |ui| {
             if app.sets.is_empty() {
                 ui.add_space(4.0);
                 ui.label(
-                    RichText::new("No sets yet. Name one below to start planning a mix.")
+                    RichText::new("No sets yet. Click + to start planning a mix.")
                         .small()
                         .color(theme::TEXT_DIM),
                 );
@@ -895,40 +913,8 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
             }
         });
 
-    // New set.
-    ui.add_space(6.0);
-    ui.horizontal(|ui| {
-        let resp = ui.add(
-            egui::TextEdit::singleline(&mut app.new_set_name)
-                .hint_text("New set…")
-                .margin(egui::vec2(8.0, 5.0))
-                .desired_width((ui.available_width() - 52.0).max(60.0)),
-        );
-        let enter = resp.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-        let can_add = !app.new_set_name.trim().is_empty();
-        if (ui
-            .add_enabled(can_add, egui::Button::new("Add"))
-            .on_hover_text("Create set")
-            .clicked()
-            || enter)
-            && can_add
-        {
-            action = Some(SetAction::Create(std::mem::take(&mut app.new_set_name)));
-        }
-    });
-
     match action {
         Some(SetAction::Open(id)) => app.set_view(View::Set(id)),
-        Some(SetAction::Create(name)) => {
-            let mut created = None;
-            app.with_library(|lib| {
-                created = Some(lib.create_set(&name)?);
-                Ok(())
-            });
-            if let Some(id) = created {
-                app.set_view(View::Set(id));
-            }
-        }
         Some(SetAction::StartRename(id, name)) => app.renaming = Some((id, name)),
         Some(SetAction::Rename(id, name)) => {
             app.renaming = None;
@@ -947,11 +933,75 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
 
 enum SetAction {
     Open(djk_library::SetId),
-    Create(String),
     StartRename(djk_library::SetId, String),
     Rename(djk_library::SetId, String),
     CancelRename,
     Delete(djk_library::SetId),
+}
+
+/// Modal dialog for naming a new set. Enter or Create saves; Esc, Cancel or a click
+/// outside closes it.
+fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
+    let mut create = false;
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::unique("new_set_dialog")).show(ctx, |ui| {
+        ui.set_width(320.0);
+        ui.label(RichText::new("New set").size(18.0).strong());
+        ui.label(
+            RichText::new("Give it a name, like “Friday warm-up”. You can rename it later.")
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        ui.add_space(10.0);
+        let field = ui.add(
+            egui::TextEdit::singleline(&mut app.new_set_name)
+                .hint_text("Set name")
+                .margin(egui::vec2(8.0, 6.0))
+                .desired_width(f32::INFINITY),
+        );
+        // Focus the name field as soon as the dialog opens.
+        if !field.has_focus() && !field.lost_focus() {
+            field.request_focus();
+        }
+        let valid = !app.new_set_name.trim().is_empty();
+        if field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) && valid {
+            create = true;
+        }
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let save = egui::Button::new(RichText::new("Create").strong())
+                .fill(theme::DECK_A.gamma_multiply(0.45))
+                .min_size(Vec2::new(80.0, 28.0));
+            if ui.add_enabled(valid, save).clicked() {
+                create = true;
+            }
+            if ui
+                .add(egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0)))
+                .clicked()
+            {
+                close = true;
+            }
+        });
+    });
+    if modal.should_close() {
+        close = true;
+    }
+    if create {
+        let name = std::mem::take(&mut app.new_set_name);
+        let mut created = None;
+        app.with_library(|lib| {
+            created = Some(lib.create_set(name.trim())?);
+            Ok(())
+        });
+        if let Some(id) = created {
+            app.set_view(View::Set(id));
+        }
+        close = true;
+    }
+    if close {
+        app.new_set_dialog = false;
+        app.new_set_name.clear();
+    }
 }
 
 /// Small spaced-out caps heading for a sidebar section.

@@ -67,6 +67,8 @@ pub struct DjApp {
     pub details_overview: Option<(TrackId, Vec<WaveCol>)>,
     pub renaming: Option<(SetId, String)>,
     pub new_set_name: String,
+    /// Whether the "New set" dialog is open.
+    pub new_set_dialog: bool,
     pub import: Option<ImportJob>,
     pub notice: Option<(String, Instant)>,
     pub output_devices: Vec<String>,
@@ -132,6 +134,7 @@ impl DjApp {
             details_overview: None,
             renaming: None,
             new_set_name: String::new(),
+            new_set_dialog: false,
             import: None,
             notice: None,
             output_devices: Vec::new(),
