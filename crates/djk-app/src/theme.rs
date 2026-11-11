@@ -16,6 +16,8 @@ pub const PANEL: Color32 = Color32::from_rgb(0x19, 0x1c, 0x22);
 pub const RAISED: Color32 = Color32::from_rgb(0x23, 0x27, 0x2f);
 pub const TEXT: Color32 = Color32::from_rgb(0xe6, 0xe8, 0xec);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0x8b, 0x92, 0x9e);
+/// Section headings and column headers: brighter than labels, softer than content.
+pub const HEADING: Color32 = Color32::from_rgb(0xc4, 0xc9, 0xd2);
 pub const WARN: Color32 = Color32::from_rgb(0xf5, 0xa6, 0x3c);
 pub const DANGER: Color32 = Color32::from_rgb(0xef, 0x5b, 0x5b);
 pub const OK: Color32 = Color32::from_rgb(0x5f, 0xd0, 0x8a);

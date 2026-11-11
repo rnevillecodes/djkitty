@@ -1022,13 +1022,7 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     ui.horizontal(|ui| {
         // Line the heading up with the text in the search field below.
         ui.add_space(widgets::FIELD_TEXT_INSET);
-        ui.label(
-            RichText::new("SETS")
-                .size(13.0)
-                .strong()
-                .extra_letter_spacing(1.4)
-                .color(theme::TEXT_DIM),
-        );
+        section_heading(ui, "SETS");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
             let plus = ui
@@ -1286,16 +1280,15 @@ fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
     }
 }
 
-/// Small spaced-out caps heading for a sidebar section.
+/// Spaced-out caps heading for a panel section (SETS, TRACK DETAILS, LOCATION).
 fn section_heading(ui: &mut Ui, text: &str) {
     ui.label(
         RichText::new(text)
-            .size(10.0)
+            .size(13.0)
             .strong()
-            .extra_letter_spacing(1.2)
-            .color(theme::TEXT_DIM),
+            .extra_letter_spacing(1.4)
+            .color(theme::HEADING),
     );
-    ui.add_space(2.0);
 }
 
 /// One-line text, cut with "…" to fit `width`.
@@ -1453,12 +1446,13 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
         .as_ref()
         .and_then(|l| l.analysis(row.id).ok().flatten());
 
-    // BPM and key tiles.
+    // BPM, key and loudness tiles.
     ui.add_space(6.0);
-    let tile_w = ((ui.available_width() - 8.0) / 2.0).max(60.0);
+    let tile_w = ((ui.available_width() - 16.0) / 3.0).max(60.0);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 8.0;
-        let tile = |ui: &mut Ui, label: &str, big: String, small: String, colour: Color32| {
+        // Label top left, a note (like the key's standard name) top right, value below.
+        let tile = |ui: &mut Ui, label: &str, big: String, note: String, colour: Color32| {
             let (r, resp) = ui.allocate_exact_size(Vec2::new(tile_w, 56.0), Sense::hover());
             let p = ui.painter();
             let inner = widgets::screen(p, r);
@@ -1467,31 +1461,31 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
                 egui::Align2::LEFT_TOP,
                 label,
                 egui::FontId::proportional(9.0),
+                theme::HEADING,
+            );
+            p.text(
+                inner.right_top() + Vec2::new(0.0, -2.0),
+                egui::Align2::RIGHT_TOP,
+                note,
+                egui::FontId::proportional(9.0),
                 theme::TEXT_DIM,
             );
             p.text(
                 egui::pos2(inner.left(), inner.bottom() + 3.0),
                 egui::Align2::LEFT_BOTTOM,
                 big,
-                egui::FontId::monospace(20.0),
+                egui::FontId::monospace(18.0),
                 colour,
-            );
-            p.text(
-                egui::pos2(inner.right(), inner.bottom() + 1.0),
-                egui::Align2::RIGHT_BOTTOM,
-                small,
-                egui::FontId::proportional(10.0),
-                theme::TEXT_DIM,
             );
             resp
         };
         let pending = analysis.is_none();
+        let unknown = || if pending { "…" } else { "—" }.to_string();
         let bpm = analysis.as_ref().and_then(|a| a.bpm);
         tile(
             ui,
             "BPM",
-            bpm.map(|b| format!("{}", Bpm(b)))
-                .unwrap_or_else(|| if pending { "…" } else { "—" }.into()),
+            bpm.map_or_else(unknown, |b| format!("{}", Bpm(b))),
             String::new(),
             theme::TEXT,
         );
@@ -1499,14 +1493,25 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
         tile(
             ui,
             "KEY",
-            key.map(|k| k.camelot())
-                .unwrap_or_else(|| if pending { "…" } else { "—" }.into()),
+            key.map_or_else(unknown, |k| k.camelot()),
             key.map(|k| k.standard()).unwrap_or_default(),
             if key.is_some() {
                 theme::KEY
             } else {
                 theme::TEXT_DIM
             },
+        );
+        let lufs = analysis.as_ref().and_then(|a| a.lufs);
+        tile(
+            ui,
+            "LUFS",
+            lufs.map_or_else(unknown, |l| format!("{l:.1}")),
+            String::new(),
+            theme::TEXT,
+        )
+        .on_hover_text(
+            "Integrated loudness (EBU R128). Closer to 0 is louder; tracks a few LU \
+             apart need the fader or trim evened out to blend.",
         );
     });
 
@@ -1523,11 +1528,6 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             match &analysis {
                 Some(a) => {
                     kv("Duration", fmt_time(a.duration_secs));
-                    kv(
-                        "Loudness",
-                        a.lufs
-                            .map_or_else(|| "—".into(), |l| format!("{l:.1} LUFS")),
-                    );
                     kv("Format", a.format.clone());
                     kv(
                         "Sample rate",
@@ -1757,7 +1757,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
             let colour = if active || resp.hovered() {
                 theme::TEXT
             } else {
-                theme::TEXT_DIM
+                theme::HEADING
             };
             ui.add(egui::Label::new(RichText::new(text).strong().color(colour)).selectable(false));
             if active {
