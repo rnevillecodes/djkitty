@@ -53,7 +53,9 @@ fn glow(painter: &Painter, centre: Pos2, radius: f32, colour: Color32, strength:
 /// Shared value-control input handling. Returns the new normalised value, if any.
 ///
 /// `travel` converts pointer movement along `axis` to value; `jump_to` maps a click
-/// position to a value (for clicks on the track rather than drags).
+/// position to a value (for clicks on the track rather than drags), or `None` to stay
+/// put: clicking a fader's cap grabs it, so double-clicking the cap resets it without
+/// first jumping to wherever the pointer was.
 fn value_input(
     ui: &Ui,
     resp: &Response,
@@ -61,7 +63,7 @@ fn value_input(
     default_t: f32,
     travel: f32,
     axis: Vec2,
-    jump_to: impl Fn(Pos2) -> f32,
+    jump_to: impl Fn(Pos2) -> Option<f32>,
 ) -> Option<f32> {
     let reset = ui.input(|i| i.modifiers.command);
     if resp.double_clicked() || (resp.clicked() && reset) {
@@ -70,7 +72,8 @@ fn value_input(
     if resp.clicked() {
         return resp
             .interact_pointer_pos()
-            .map(|p| jump_to(p).clamp(0.0, 1.0));
+            .and_then(jump_to)
+            .map(|v| v.clamp(0.0, 1.0));
     }
     if resp.dragged() && !reset {
         let fine = if ui.input(|i| i.modifiers.shift) {
@@ -129,7 +132,8 @@ pub fn fader(
     let span = end - start;
     let travel = span.length();
     let axis = span / travel.max(1.0);
-    let jump = |p: Pos2| (p - start).dot(axis) / travel.max(1.0);
+    let cap_hit = Rect::from_center_size(start + span * t, cap);
+    let jump = |p: Pos2| (!cap_hit.contains(p)).then(|| (p - start).dot(axis) / travel.max(1.0));
     let mut out = value_input(ui, &resp, t, default_t, travel, axis, jump);
     if style.centre_detent
         && let Some(v) = out.as_mut()
@@ -291,7 +295,7 @@ pub fn knob(
             while a < 0.0 {
                 a += std::f32::consts::TAU;
             }
-            (a / KNOB_SWEEP).min(if a > KNOB_SWEEP + 0.5 { 0.0 } else { 1.0 })
+            Some((a / KNOB_SWEEP).min(if a > KNOB_SWEEP + 0.5 { 0.0 } else { 1.0 }))
         };
         let v = value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0), jump);
         if bipolar && resp.dragged() {
