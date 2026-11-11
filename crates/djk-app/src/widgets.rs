@@ -288,9 +288,14 @@ pub fn knob(
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), sense);
     let out = if enabled {
         let c = rect.center();
-        // Clicking jumps to the angle under the pointer.
+        // Clicking the ring jumps to the angle under the pointer; clicking the body grabs
+        // it in place, so double-clicking the body resets without a jump first.
+        let body_r = diameter / 2.0 - 7.0;
         let jump = move |p: Pos2| {
             let d = p - c;
+            if d.length() < body_r {
+                return None;
+            }
             let mut a = d.y.atan2(d.x) - KNOB_START;
             while a < 0.0 {
                 a += std::f32::consts::TAU;
