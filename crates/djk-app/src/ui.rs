@@ -764,44 +764,9 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
 
 // ---------------------------------------------------------------- sidebar
 
+/// The sidebar is the set list; the library itself is the main track list.
 fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     ui.add_space(10.0);
-    section_heading(ui, "COLLECTION");
-    // Library search: typing jumps to the library and filters it by title or artist.
-    let search = ui.add(
-        egui::TextEdit::singleline(&mut app.query.search)
-            .hint_text("Search library  (Ctrl+F)")
-            .margin(egui::vec2(8.0, 5.0))
-            .desired_width(ui.available_width()),
-    );
-    if app.focus_search && app.view == View::Library {
-        search.request_focus();
-        app.focus_search = false;
-    }
-    if search.changed() {
-        app.set_view(View::Library);
-        app.rows_dirty = true;
-    }
-    ui.add_space(4.0);
-    let lib_count = app
-        .library
-        .as_ref()
-        .and_then(|l| l.track_count().ok())
-        .unwrap_or(0);
-    if list_row(
-        ui,
-        app.view == View::Library,
-        RowIcon::Library,
-        "Library",
-        None,
-        Some(lib_count.to_string()),
-    )
-    .clicked()
-    {
-        app.set_view(View::Library);
-    }
-
-    ui.add_space(14.0);
     ui.horizontal(|ui| {
         section_heading(ui, "SETS");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -889,10 +854,8 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
                 let resp = list_row(
                     ui,
                     app.view == View::Set(set.id),
-                    RowIcon::Set,
                     &set.name,
                     Some(&subtitle),
-                    None,
                 );
                 if resp.double_clicked() {
                     action = Some(SetAction::StartRename(set.id, set.name.clone()));
@@ -1016,12 +979,6 @@ fn section_heading(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-#[derive(Clone, Copy)]
-enum RowIcon {
-    Library,
-    Set,
-}
-
 /// One-line text, cut with "…" to fit `width`.
 fn truncated(
     ui: &Ui,
@@ -1043,16 +1000,9 @@ fn truncated(
     ui.painter().layout_job(job)
 }
 
-/// A navigation row: icon tile, title, optional subtitle and count badge, with hover and
-/// selected states (selected rows get a tinted fill and an accent bar).
-fn list_row(
-    ui: &mut Ui,
-    selected: bool,
-    icon: RowIcon,
-    title: &str,
-    subtitle: Option<&str>,
-    badge: Option<String>,
-) -> egui::Response {
+/// A set row: playlist icon tile, title and optional subtitle, with hover and selected
+/// states (selected rows get a tinted fill and an accent bar).
+fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) -> egui::Response {
     let h = if subtitle.is_some() { 44.0 } else { 34.0 };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let p = ui.painter();
@@ -1085,41 +1035,17 @@ fn list_row(
     );
     let c = tile.center();
     let stroke = egui::Stroke::new(1.6, ink);
-    match icon {
-        RowIcon::Library => {
-            // Stacked records.
-            for dy in [-5.0, 0.0, 5.0] {
-                p.line_segment([c + Vec2::new(-6.0, dy), c + Vec2::new(6.0, dy)], stroke);
-            }
-        }
-        RowIcon::Set => {
-            // A playlist: three lines and a note head.
-            for (dy, w) in [(-5.0, 8.0), (0.0, 8.0), (5.0, 4.0)] {
-                p.line_segment(
-                    [c + Vec2::new(-7.0, dy), c + Vec2::new(-7.0 + w, dy)],
-                    stroke,
-                );
-            }
-            p.line_segment([c + Vec2::new(5.0, -6.0), c + Vec2::new(5.0, 4.0)], stroke);
-            p.circle_filled(c + Vec2::new(3.0, 5.0), 2.4, ink);
-        }
-    }
-
-    // Badge (right-aligned count pill).
-    let mut text_right = rect.right() - 10.0;
-    if let Some(b) = badge {
-        let g = p.layout_no_wrap(b, egui::FontId::proportional(11.0), theme::TEXT_DIM);
-        let pill = Rect::from_min_size(
-            egui::pos2(
-                rect.right() - 10.0 - g.size().x - 14.0,
-                rect.center().y - 9.0,
-            ),
-            Vec2::new(g.size().x + 14.0, 18.0),
+    // A playlist: three lines and a note head.
+    for (dy, w) in [(-5.0, 8.0), (0.0, 8.0), (5.0, 4.0)] {
+        p.line_segment(
+            [c + Vec2::new(-7.0, dy), c + Vec2::new(-7.0 + w, dy)],
+            stroke,
         );
-        p.rect_filled(pill, 9, theme::RAISED);
-        p.galley(pill.center() - g.size() / 2.0, g, theme::TEXT_DIM);
-        text_right = pill.left() - 8.0;
     }
+    p.line_segment([c + Vec2::new(5.0, -6.0), c + Vec2::new(5.0, 4.0)], stroke);
+    p.circle_filled(c + Vec2::new(3.0, 5.0), 2.4, ink);
+
+    let text_right = rect.right() - 10.0;
 
     let x = tile.right() + 10.0;
     let width = text_right - x;
@@ -1331,32 +1257,59 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
 fn browser(app: &mut DjApp, ui: &mut Ui) {
     // Toolbar.
     ui.horizontal(|ui| {
-        let title = match app.view {
-            View::Library => "Library".to_owned(),
-            View::Set(id) => app
-                .sets
-                .iter()
-                .find(|s| s.id == id)
-                .map(|s| format!("Set: {}", s.name))
-                .unwrap_or_default(),
-        };
-        ui.heading(title);
+        // Title, as a breadcrumb when a set is open: "Library / Set name", where
+        // clicking "Library" goes back to the full library.
+        match app.view {
+            View::Library => {
+                ui.heading("Library");
+            }
+            View::Set(id) => {
+                let back = ui
+                    .add(
+                        egui::Label::new(
+                            RichText::new("Library").size(18.0).color(theme::TEXT_DIM),
+                        )
+                        .sense(Sense::click()),
+                    )
+                    .on_hover_text("Back to the full library");
+                if back.hovered() {
+                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+                    ui.painter().line_segment(
+                        [back.rect.left_bottom(), back.rect.right_bottom()],
+                        egui::Stroke::new(1.0, theme::TEXT_DIM),
+                    );
+                }
+                if back.clicked() {
+                    app.set_view(View::Library);
+                }
+                ui.label(RichText::new("/").size(18.0).color(theme::TEXT_DIM));
+                let name = app
+                    .sets
+                    .iter()
+                    .find(|s| s.id == id)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_default();
+                ui.heading(name);
+            }
+        }
         ui.add_space(12.0);
-        // The library is searched from the sidebar; here we only filter an open set.
-        if matches!(app.view, View::Set(_)) {
-            let search = ui.add(
-                egui::TextEdit::singleline(&mut app.set_track_filter)
-                    .hint_text("Filter this set  (Ctrl+F)")
-                    .margin(egui::vec2(8.0, 4.0))
-                    .desired_width(240.0),
-            );
-            if app.focus_search {
-                search.request_focus();
-                app.focus_search = false;
-            }
-            if search.changed() {
-                app.rows_dirty = true;
-            }
+        // Library view searches the library; an open set gets its own filter.
+        let (text, hint) = match app.view {
+            View::Library => (&mut app.query.search, "Search library  (Ctrl+F)"),
+            View::Set(_) => (&mut app.set_track_filter, "Filter this set  (Ctrl+F)"),
+        };
+        let search = ui.add(
+            egui::TextEdit::singleline(text)
+                .hint_text(hint)
+                .margin(egui::vec2(8.0, 4.0))
+                .desired_width(240.0),
+        );
+        if app.focus_search {
+            search.request_focus();
+            app.focus_search = false;
+        }
+        if search.changed() {
+            app.rows_dirty = true;
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             match &app.import {
