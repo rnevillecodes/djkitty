@@ -56,6 +56,9 @@ pub struct Mapping {
     pub pitch_up_is_faster: bool,
     /// LED note for each button LED, sent on the deck's note channel.
     pub leds: LedMap,
+    /// Sent on connect to ask the controller to report every fader and knob position,
+    /// so the app matches the hardware before anything is moved.
+    pub request_state: Option<&'static [u8]>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -106,6 +109,10 @@ pub static DDJ_FLX2: Mapping = Mapping {
         cue: 0x0C,
         headphone_cue: 0x54,
     },
+    // The DDJ-400/FLX4 "send current control positions" SysEx (as used by Mixxx).
+    request_state: Some(&[
+        0xF0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x06, 0x00, 0x03, 0x01, 0xF7,
+    ]),
     entries: &[
         // Deck 1 (MIDI channel 1)
         ((0x90, 0x0B), C::Button(B::Play(A))),
@@ -309,8 +316,9 @@ mod tests {
 
     #[test]
     fn eq_knob_kills_after_picking_up_the_centre() {
-        let (mut t, _) = translator();
-        // App EQ starts centred: a hardware knob far from it is ignored...
+        let (mut t, values) = translator();
+        // EQ centred on screen: a hardware knob far from it is ignored...
+        values.set_from_ui(FaderTarget::Eq(DB, Low), djk_core::EQ_NEUTRAL);
         assert_eq!(t.translate(&[0xB1, 0x0F, 0x00]), None);
         // ...until it passes the centre, then it follows the knob down to a kill.
         t.translate(&[0xB1, 0x0F, 0x40]);

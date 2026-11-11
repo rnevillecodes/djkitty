@@ -109,10 +109,14 @@ pub struct Takeover {
 }
 
 impl Takeover {
+    /// Faders start engaged: until something is changed on screen, the physical position
+    /// is the truth, so the first message after connecting (or the controller's initial
+    /// state dump) moves the app to match the hardware.
     pub fn new(values: Arc<AppValues>) -> Self {
         let mut state = [FaderState::default(); FaderTarget::COUNT];
         for (i, s) in state.iter_mut().enumerate() {
             s.seen_generation = values.generations[i].load(Ordering::Acquire);
+            s.engaged = true;
         }
         Self { values, state }
     }
@@ -180,8 +184,19 @@ mod tests {
     }
 
     #[test]
-    fn first_message_far_from_app_value_is_ignored() {
-        let (mut t, _) = setup(); // app crossfader 0.5
+    fn first_message_after_connect_is_applied() {
+        // A channel fader sitting at 0 on the hardware pulls the app's (default 100%)
+        // fader down as soon as it reports in, without waiting for a pickup.
+        let (mut t, values) = setup();
+        assert_eq!(t.apply(CH_A, 0.0), Some(0.0));
+        assert_eq!(values.get(CH_A), 0.0);
+        assert_eq!(t.apply(CH_A, 0.1), Some(0.1));
+    }
+
+    #[test]
+    fn screen_change_before_first_message_still_needs_pickup() {
+        let (mut t, values) = setup(); // app crossfader 0.5
+        values.set_from_ui(FaderTarget::Crossfader, 0.5);
         assert_eq!(t.apply(FaderTarget::Crossfader, 0.0), None);
         assert_eq!(t.apply(FaderTarget::Crossfader, 0.3), None);
         assert_eq!(t.apply(FaderTarget::Crossfader, 0.6), Some(0.6));

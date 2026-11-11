@@ -64,9 +64,15 @@ The system SHALL map the controller's browse knob to moving the selection in the
 ### Requirement: Soft takeover for faders
 The system SHALL ignore a controller fader or EQ knob whose physical position differs from the app's value, such as after the value was changed on screen, until the physical control passes through the app's value, to avoid sudden jumps.
 
+On connect, before any value is changed on screen, the system SHALL ask the controller for its current positions and SHALL apply each control's first reported position directly, so the app matches the hardware.
+
 #### Scenario: Value changed on screen
 - **WHEN** deck A's channel fader was lowered on screen to 20% while the hardware fader sits at 100%, and the user then moves the hardware fader from 100% to 90%
 - **THEN** the deck A level stays at 20% until the hardware fader reaches 20%, after which it follows the hardware
+
+#### Scenario: Fader down when the controller connects
+- **WHEN** the controller connects with its deck A channel fader all the way down
+- **THEN** deck A's channel fader in the app moves to 0% without the hardware fader being touched
 
 ### Requirement: LED feedback
 The system SHALL light the controller's play and cue LEDs to reflect each deck's state (play lit while playing; cue lit at the cue point or blinking when paused elsewhere) and headphone cue LEDs to reflect cue selection, and SHALL resync all LEDs on connect.

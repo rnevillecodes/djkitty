@@ -60,3 +60,14 @@ Expected: send the same note number back on the same channel, velocity `0x7F` = 
 | Cue deck 1        | `90 0C 7F` / `90 0C 00` | _todo_ |
 | Headphone cue 1   | `90 54 7F` / `90 54 00` | _todo_ |
 | (deck 2: status `91`) |                   |          |
+
+## Initial control positions
+
+Faders and knobs only send MIDI when moved, so on connect the app sends the DDJ-400/FLX4
+"report current positions" SysEx (`F0 00 40 05 00 00 02 06 00 03 01 F7`, as Mixxx does)
+and applies whatever comes back. Until something is changed on screen the hardware is
+the truth, so the first message from each fader is applied without waiting for pickup.
+
+| Question                                   | Observed |
+|--------------------------------------------|----------|
+| FLX2 answers the SysEx with all positions  | _todo_   |

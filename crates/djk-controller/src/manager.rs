@@ -268,15 +268,22 @@ fn connect(
     let input = input
         .connect(&port, "djkitty-in", on_message, data)
         .map_err(|e| e.to_string())?;
-    let out = MidiOutput::new("djkitty-out").ok().and_then(|o| {
+    let mut out = MidiOutput::new("djkitty-out").ok().and_then(|o| {
         let port = o
             .ports()
             .into_iter()
             .find(|p| o.port_name(p).is_ok_and(|n| n.contains(mapping.port_match)))?;
         o.connect(&port, "djkitty-out").ok()
     });
-    if out.is_none() {
-        tracing::warn!("controller output port not available; LEDs disabled");
+    match (&mut out, mapping.request_state) {
+        (None, _) => tracing::warn!("controller output port not available; LEDs disabled"),
+        // The input is already listening, so the positions it reports are applied.
+        (Some(o), Some(msg)) => {
+            if let Err(e) = o.send(msg) {
+                tracing::warn!("cannot request controller state: {e}");
+            }
+        }
+        (Some(_), None) => {}
     }
     Ok((input, out))
 }
