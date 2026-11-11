@@ -613,34 +613,23 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             );
         };
 
-        // Headphone cue toggles above each channel.
-        for (deck, cx) in [(DeckId::A, 77.0), (DeckId::B, 127.0)] {
-            place(ui, at(cx - 23.0, 0.0, 46.0, 22.0), &mut |ui| {
-                let on = m.headphone_cue[deck.index()];
-                let resp = widgets::led_toggle(
-                    ui,
-                    Vec2::new(46.0, 22.0),
-                    "CUE",
-                    on,
-                    theme::deck_colour(deck),
-                    phones_ok,
-                );
-                if resp.clicked() {
-                    app.audio.send(Command::ToggleHeadphoneCue(deck));
-                }
-                resp.on_hover_text(format!("Headphone cue for deck {}", deck.label()))
-                    .on_disabled_hover_text(
-                        "Headphone cue needs a 4-channel device (like the DDJ-FLX2)",
-                    );
-            });
-        }
-
-        // Channel faders with their meters.
-        let fader_h = 112.0;
+        // Channel faders with their meters (headphone cue is on the 1/2 keys and the
+        // controller).
+        // Everything fits inside the card's height (the same as the decks): the
+        // crossfader sits at the bottom and the faders take the height above it, leaving
+        // room for their labels.
+        let top = 4.0;
+        let xf_h = 28.0;
+        let xf_top = full.height() - xf_h;
+        let fader_h = (xf_top - top - 22.0).max(60.0);
         for (deck, fx, mx) in [(DeckId::A, 60.0, 50.0), (DeckId::B, 110.0, 148.0)] {
             let i = deck.index();
-            widgets::meter(ui.painter(), at(mx, 32.0, 6.0, fader_h - 4.0), meters[i]);
-            place(ui, at(fx, 30.0, 34.0, fader_h), &mut |ui| {
+            widgets::meter(
+                ui.painter(),
+                at(mx, top + 2.0, 6.0, fader_h - 4.0),
+                meters[i],
+            );
+            place(ui, at(fx, top, 34.0, fader_h), &mut |ui| {
                 let (resp, new) = widgets::fader(
                     ui,
                     Vec2::new(34.0, fader_h),
@@ -664,22 +653,30 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             label(
                 ui,
                 fx + 17.0,
-                30.0 + fader_h + 3.0,
+                top + fader_h + 3.0,
                 deck.label(),
                 theme::deck_colour(deck),
             );
         }
 
         // Master meter (left/right).
-        widgets::meter(ui.painter(), at(176.0, 32.0, 5.0, fader_h - 4.0), meters[2]);
-        widgets::meter(ui.painter(), at(185.0, 32.0, 5.0, fader_h - 4.0), meters[3]);
-        label(ui, 183.0, 30.0 + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
+        widgets::meter(
+            ui.painter(),
+            at(176.0, top + 2.0, 5.0, fader_h - 4.0),
+            meters[2],
+        );
+        widgets::meter(
+            ui.painter(),
+            at(185.0, top + 2.0, 5.0, fader_h - 4.0),
+            meters[3],
+        );
+        label(ui, 183.0, top + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
 
         // Master and headphone level knobs.
         let knobs = [
             (
                 "LEVEL",
-                30.0,
+                top + 4.0,
                 m.master_level,
                 defaults.master_level,
                 true,
@@ -687,7 +684,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             ),
             (
                 "PHONES",
-                92.0,
+                top + 74.0,
                 m.headphone_level,
                 defaults.headphone_level,
                 phones_ok,
@@ -718,8 +715,8 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
         // Crossfader.
         let xf_w = full.width() - 36.0;
         let xf = Rect::from_min_size(
-            egui::pos2(full.center().x - xf_w / 2.0, y0 + 166.0),
-            Vec2::new(xf_w, 28.0),
+            egui::pos2(full.center().x - xf_w / 2.0, y0 + xf_top),
+            Vec2::new(xf_w, xf_h),
         );
         ui.painter().text(
             egui::pos2(xf.left() - 10.0, xf.center().y),

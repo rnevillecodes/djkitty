@@ -1,4 +1,4 @@
-//! Custom-painted DJ controls: faders, knobs, transport buttons, LED toggles and level
+//! Custom-painted DJ controls: faders, knobs, transport buttons and level
 //! meters. They borrow from hardware (fader caps, lit button rings, segmented meters) so
 //! the screen reads like the controller in front of you.
 //!
@@ -449,81 +449,6 @@ pub fn transport_button(
             );
         }
     }
-    if hovered {
-        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-    }
-    resp
-}
-
-/// A pill-shaped toggle with an LED dot, like a mixer's headphone cue button.
-pub fn led_toggle(
-    ui: &mut Ui,
-    size: Vec2,
-    label: &str,
-    on: bool,
-    led: Color32,
-    enabled: bool,
-) -> Response {
-    let sense = if enabled {
-        Sense::click()
-    } else {
-        Sense::hover()
-    };
-    let (rect, resp) = ui.allocate_exact_size(size, sense);
-    let painter = ui.painter_at(rect.expand(6.0));
-    let hovered = resp.hovered() && enabled;
-    let cr = CornerRadius::same((size.y / 2.0) as u8);
-    painter.rect_filled(
-        rect.translate(vec2(0.0, 1.5)),
-        cr,
-        Color32::from_black_alpha(120),
-    );
-    let (top, bottom) = if hovered {
-        (
-            Color32::from_rgb(0x3a, 0x3f, 0x48),
-            Color32::from_rgb(0x26, 0x29, 0x30),
-        )
-    } else {
-        (
-            Color32::from_rgb(0x30, 0x34, 0x3c),
-            Color32::from_rgb(0x20, 0x23, 0x29),
-        )
-    };
-    painter.rect_filled(rect, cr, mix(top, bottom, 0.5));
-    painter.rect_stroke(
-        rect,
-        cr,
-        Stroke::new(
-            1.0,
-            if on {
-                led.gamma_multiply(0.7)
-            } else {
-                Color32::from_black_alpha(160)
-            },
-        ),
-        StrokeKind::Inside,
-    );
-    let dot = pos2(rect.left() + 10.0, rect.center().y);
-    if on && enabled {
-        glow(&painter, dot, 3.5, led, 0.9);
-        painter.circle_filled(dot, 3.5, led);
-    } else {
-        painter.circle_filled(dot, 3.5, Color32::from_rgb(0x12, 0x14, 0x18));
-    }
-    let ink = if !enabled {
-        theme::TEXT_DIM.gamma_multiply(0.5)
-    } else if on {
-        theme::TEXT
-    } else {
-        theme::TEXT_DIM
-    };
-    painter.text(
-        pos2((dot.x + 6.0 + rect.right()) / 2.0, rect.center().y),
-        Align2::CENTER_CENTER,
-        label,
-        FontId::proportional(10.5),
-        ink,
-    );
     if hovered {
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
