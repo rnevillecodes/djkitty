@@ -5,6 +5,7 @@
 mod analysis;
 mod app;
 mod audio;
+mod columns;
 mod devtools;
 mod loader;
 mod settings;

@@ -1705,28 +1705,24 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
     let rows = &app.rows;
     let selected = app.selected;
 
-    // Resizable tables remember their column widths, which would stop the remainder
-    // columns from stretching when the panel grows. Keying the stored state on the width
-    // re-fits the columns whenever it changes (manual resizes last until then).
-    let width_key = ui.available_width().round() as i32;
+    // The columns always fill the list exactly: widths come from `app.track_columns`,
+    // and dragging a divider (drawn after the table) moves width between neighbours.
+    let area = ui.available_rect_before_wrap();
+    let num_w = if in_set { 30.0 } else { 0.0 };
+    let fit_total = track_columns_total(ui, area, num_w);
+    let widths = app.track_columns.fit(fit_total);
     let mut table = TableBuilder::new(ui)
-        .id_salt(("track_table", width_key, in_set))
+        .id_salt(("track_table", in_set))
         .striped(true)
-        .resizable(true)
+        .resizable(false)
         // Always use the full width and height, even with few or short rows.
         .auto_shrink(false)
         .sense(Sense::click_and_drag())
         .cell_layout(Layout::left_to_right(Align::Center))
-        // The outer columns are fixed, so no resize line is drawn at either edge.
-        .column(Column::exact(if in_set { 30.0 } else { 0.0 }).resizable(false))
-        // Title and artist share whatever width is left, so the table always fills the
-        // panel as the window or sidebar changes size.
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::remainder().at_least(80.0).clip(true))
-        .column(Column::exact(60.0))
-        .column(Column::exact(50.0))
-        .column(Column::exact(60.0))
-        .column(Column::exact(56.0).resizable(false));
+        .column(Column::exact(num_w));
+    for &w in &widths {
+        table = table.column(Column::exact(w).clip(true));
+    }
     if app.scroll_to_selected
         && let Some(i) = selected
     {
@@ -1952,6 +1948,8 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 });
             });
         });
+
+    column_dividers(app, ui, area, num_w, &widths, fit_total);
 
     // While a track is being dragged, show its title next to the pointer.
     if let Some(drag) = egui::DragAndDrop::payload::<TrackDrag>(ui.ctx())
@@ -2265,4 +2263,80 @@ pub fn drop_overlay(app: &DjApp, ctx: &egui::Context) {
 /// A menu entry with its label on the left and an icon on the right.
 fn menu_item(label: &str, icon: egui::ImageSource<'static>) -> egui::Button<'static> {
     egui::Button::new(label.to_owned()).right_text(widgets::icon(icon, 14.0, theme::TEXT_DIM))
+}
+
+// ---------------------------------------------------------------- track list columns
+
+/// Default track list columns: (preferred width, minimum, grows with the list) for
+/// title, artist, BPM, key, LUFS and time, with any saved widths applied.
+pub fn track_columns(saved: Option<&[f32]>) -> crate::columns::FitColumns {
+    let mut cols = crate::columns::FitColumns::new(&[
+        (320.0, 120.0, true),
+        (220.0, 80.0, true),
+        (64.0, 48.0, false),
+        (54.0, 42.0, false),
+        (64.0, 50.0, false),
+        (60.0, 50.0, false),
+    ]);
+    if let Some(saved) = saved {
+        cols.set_preferred(saved);
+    }
+    cols
+}
+
+/// Width shared by the track list's resizable columns: the list's width less the "#"
+/// column and the gaps between all seven columns (and a hair of slack for rounding).
+fn track_columns_total(ui: &Ui, area: Rect, num_w: f32) -> f32 {
+    area.width() - num_w - ui.spacing().item_spacing.x * 6.0 - 1.0
+}
+
+/// Draggable dividers between the track list's columns. Dragging moves width between
+/// the two columns either side, so the columns keep filling the list exactly; the new
+/// widths are saved when the drag ends.
+fn column_dividers(
+    app: &mut DjApp,
+    ui: &mut Ui,
+    area: Rect,
+    num_w: f32,
+    widths: &[f32],
+    total: f32,
+) {
+    let gap = ui.spacing().item_spacing.x;
+    // Dividers sit in the middle of the gap after each column (as egui's own do).
+    let mut x = area.left() - gap * 0.5 + num_w + gap;
+    for (i, w) in widths
+        .iter()
+        .enumerate()
+        .take(widths.len().saturating_sub(1))
+    {
+        x += w + gap;
+        let line = Rect::from_x_y_ranges(x..=x, area.y_range());
+        let resp = ui.interact(
+            line.expand2(Vec2::new(
+                ui.style().interaction.resize_grab_radius_side,
+                0.0,
+            )),
+            egui::Id::unique(("track_column_divider", i)),
+            Sense::drag(),
+        );
+        if resp.dragged() {
+            app.track_columns.drag(i, resp.drag_delta().x, total);
+        }
+        if resp.drag_stopped() {
+            app.settings.track_columns = Some(app.track_columns.preferred().to_vec());
+            app.settings.save();
+        }
+        let visuals = &ui.style().visuals.widgets;
+        let stroke = if resp.dragged() {
+            visuals.active.bg_stroke
+        } else if resp.hovered() {
+            visuals.hovered.bg_stroke
+        } else {
+            visuals.noninteractive.bg_stroke
+        };
+        if resp.hovered() || resp.dragged() {
+            ui.set_cursor_icon(egui::CursorIcon::ResizeColumn);
+        }
+        ui.painter().vline(x, area.y_range(), stroke);
+    }
 }

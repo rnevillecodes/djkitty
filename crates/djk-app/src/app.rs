@@ -98,6 +98,8 @@ pub struct DjApp {
     pub set_filter: String,
     /// Text filtering the tracks of the open set (the library uses `query.search`).
     pub set_track_filter: String,
+    /// Track list column widths (title, artist, BPM, key, LUFS, time).
+    pub track_columns: crate::columns::FitColumns,
     /// Level meter ballistics: channel A, channel B, master left, master right.
     pub meters: [crate::widgets::Ballistic; 4],
     meters_updated: Instant,
@@ -109,6 +111,7 @@ impl DjApp {
         crate::theme::apply(&cc.egui_ctx);
         let data_dir = djk_library::default_data_dir().unwrap_or_else(|_| PathBuf::from("."));
         let settings = Settings::load(&data_dir);
+        let settings_columns = settings.track_columns.clone();
         let mut audio = AudioService::start(settings.audio_device.as_deref());
         let ctx = cc.egui_ctx.clone();
 
@@ -162,6 +165,7 @@ impl DjApp {
             wave_window_secs: crate::waveview::DEFAULT_WINDOW_SECS,
             set_filter: String::new(),
             set_track_filter: String::new(),
+            track_columns: crate::ui::track_columns(settings_columns.as_deref()),
             meters: Default::default(),
             meters_updated: Instant::now(),
         };
