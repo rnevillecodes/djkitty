@@ -338,9 +338,10 @@ pub fn scrolling(
         }
         painter.add(egui::Shape::mesh(mesh));
     } else {
+        // Next to the deck letter in the top-left corner.
         painter.text(
-            rect.center(),
-            egui::Align2::CENTER_CENTER,
+            rect.left_top() + Vec2::new(28.0, 6.0),
+            egui::Align2::LEFT_TOP,
             "No track loaded",
             egui::FontId::proportional(13.0),
             theme::TEXT_DIM,
