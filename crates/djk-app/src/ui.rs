@@ -764,6 +764,22 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
 fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     ui.add_space(10.0);
     section_heading(ui, "COLLECTION");
+    // Library search: typing jumps to the library and filters it by title or artist.
+    let search = ui.add(
+        egui::TextEdit::singleline(&mut app.query.search)
+            .hint_text("Search library  (Ctrl+F)")
+            .margin(egui::vec2(8.0, 5.0))
+            .desired_width(ui.available_width()),
+    );
+    if app.focus_search && app.view == View::Library {
+        search.request_focus();
+        app.focus_search = false;
+    }
+    if search.changed() {
+        app.set_view(View::Library);
+        app.rows_dirty = true;
+    }
+    ui.add_space(4.0);
     let lib_count = app
         .library
         .as_ref()
@@ -784,17 +800,40 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
 
     ui.add_space(14.0);
     section_heading(ui, "SETS");
-    let sets = app.sets.clone();
+    // Filter at the top of the list (once there is something to filter).
+    if !app.sets.is_empty() {
+        ui.add(
+            egui::TextEdit::singleline(&mut app.set_filter)
+                .hint_text("Search sets…")
+                .margin(egui::vec2(8.0, 5.0))
+                .desired_width(ui.available_width()),
+        );
+        ui.add_space(4.0);
+    }
+    let needle = app.set_filter.trim().to_lowercase();
+    let sets: Vec<_> = app
+        .sets
+        .iter()
+        .filter(|s| needle.is_empty() || s.name.to_lowercase().contains(&needle))
+        .cloned()
+        .collect();
     let mut action: Option<SetAction> = None;
     egui::ScrollArea::vertical()
         .id_salt("sets")
         .auto_shrink([false, true])
         .max_height((ui.available_height() - 44.0).max(60.0))
         .show(ui, |ui| {
-            if sets.is_empty() {
+            if app.sets.is_empty() {
                 ui.add_space(4.0);
                 ui.label(
                     RichText::new("No sets yet. Name one below to start planning a mix.")
+                        .small()
+                        .color(theme::TEXT_DIM),
+                );
+            } else if sets.is_empty() {
+                ui.add_space(4.0);
+                ui.label(
+                    RichText::new(format!("No sets match “{}”", app.set_filter.trim()))
                         .small()
                         .color(theme::TEXT_DIM),
                 );
@@ -1253,17 +1292,21 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
         };
         ui.heading(title);
         ui.add_space(12.0);
-        let search = ui.add(
-            egui::TextEdit::singleline(&mut app.query.search)
-                .hint_text("Search title or artist  (Ctrl+F)")
-                .desired_width(260.0),
-        );
-        if app.focus_search {
-            search.request_focus();
-            app.focus_search = false;
-        }
-        if search.changed() {
-            app.rows_dirty = true;
+        // The library is searched from the sidebar; here we only filter an open set.
+        if matches!(app.view, View::Set(_)) {
+            let search = ui.add(
+                egui::TextEdit::singleline(&mut app.set_track_filter)
+                    .hint_text("Filter this set  (Ctrl+F)")
+                    .margin(egui::vec2(8.0, 4.0))
+                    .desired_width(240.0),
+            );
+            if app.focus_search {
+                search.request_focus();
+                app.focus_search = false;
+            }
+            if search.changed() {
+                app.rows_dirty = true;
+            }
         }
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             match &app.import {
@@ -1307,7 +1350,11 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
     if app.rows.is_empty() {
         ui.add_space(30.0);
         ui.vertical_centered(|ui| {
-            let msg = match (app.view, app.query.search.is_empty()) {
+            let filter = match app.view {
+                View::Library => &app.query.search,
+                View::Set(_) => &app.set_track_filter,
+            };
+            let msg = match (app.view, filter.trim().is_empty()) {
                 (_, false) => "No tracks match your search.",
                 (View::Library, true) => {
                     "Your library is empty. Import a music folder to get started."
@@ -1336,7 +1383,7 @@ enum RowAction {
 fn track_table(app: &mut DjApp, ui: &mut Ui) {
     let in_set = matches!(app.view, View::Set(_));
     // Row indices only match set positions when no search filter is hiding rows.
-    let can_reorder = in_set && app.query.search.trim().is_empty();
+    let can_reorder = in_set && app.set_track_filter.trim().is_empty();
     let row_h = 26.0;
     let mut action: Option<RowAction> = None;
     let sort = app.query.sort;

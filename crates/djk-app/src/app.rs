@@ -76,6 +76,10 @@ pub struct DjApp {
     /// Seconds of audio visible in the scrolling waveform lanes (shared, so both decks
     /// use the same time scale).
     pub wave_window_secs: f64,
+    /// Text filtering the sidebar's set list by name.
+    pub set_filter: String,
+    /// Text filtering the tracks of the open set (the library uses `query.search`).
+    pub set_track_filter: String,
     /// Level meter ballistics: channel A, channel B, master left, master right.
     pub meters: [crate::widgets::Ballistic; 4],
     meters_updated: Instant,
@@ -135,6 +139,8 @@ impl DjApp {
             focus_search: false,
             show_shortcuts: false,
             wave_window_secs: crate::waveview::DEFAULT_WINDOW_SECS,
+            set_filter: String::new(),
+            set_track_filter: String::new(),
             meters: Default::default(),
             meters_updated: Instant::now(),
         };
@@ -178,7 +184,7 @@ impl DjApp {
         let rows = match self.view {
             View::Library => lib.tracks(&self.query),
             View::Set(set) => lib.set_tracks(set).map(|mut rows| {
-                let needle = self.query.search.trim().to_lowercase();
+                let needle = self.set_track_filter.trim().to_lowercase();
                 rows.retain(|r| djk_library::tracks_match(r, &needle));
                 rows
             }),

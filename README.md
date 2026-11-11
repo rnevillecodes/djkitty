@@ -77,7 +77,7 @@ status bar to see this list in the app.
 |------|--------|
 | `↑` / `↓` | Move the track selection |
 | `Shift+←` / `Shift+→` | Load the selected track to deck A / B |
-| `Ctrl+F` | Search |
+| `Ctrl+F` | Search the library (or filter the open set) |
 | `Esc` | Clear the selection (hides the track details panel) |
 
 ## Not in v0.1

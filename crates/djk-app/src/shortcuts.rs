@@ -59,7 +59,7 @@ pub const GLOBAL_KEYS: &[(&str, &str)] = &[
         "Shift+Left / Shift+Right",
         "Load the selected track to deck A / B",
     ),
-    ("Ctrl+F", "Search"),
+    ("Ctrl+F", "Search the library (or filter the open set)"),
     ("Esc", "Clear the selection (hides track details)"),
 ];
 
