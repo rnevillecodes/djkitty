@@ -133,7 +133,7 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
 
 /// `--import-folder <path>`: import a folder into the library without the UI, then analyse
 /// everything that needs it. Honours `DJKITTY_DATA_DIR`.
-/// `--analyse [paths…]`: print BPM and key for files (folders are searched). With no
+/// `--analyse [paths…]`: print BPM, key, loudness and beatgrid for files (folders are searched). With no
 /// paths, re-analyses every track in the library and shows the stored BPM alongside.
 /// Audio files are only read and no results are saved. Opening the library does apply
 /// any pending database upgrade (schema migration).
@@ -168,8 +168,8 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
         }
     }
     println!(
-        "{:>8}  {:>8}  {:>4}  {:>18}  file",
-        "stored", "now", "key", "grid"
+        "{:>8}  {:>8}  {:>4}  {:>6}  {:>18}  file",
+        "stored", "now", "key", "LUFS", "grid"
     );
     for (path, stored) in files {
         let name = path
@@ -178,7 +178,7 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
             .unwrap_or_default();
         match djk_analysis::analyse_file(&path) {
             Ok(a) => println!(
-                "{:>8}  {:>8}  {:>4}  {:>18}  {name}",
+                "{:>8}  {:>8}  {:>4}  {:>6}  {:>18}  {name}",
                 stored
                     .map(|b| format!("{b:.1}"))
                     .unwrap_or_else(|| "-".into()),
@@ -186,6 +186,9 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
                     .map(|b| format!("{b:.2}"))
                     .unwrap_or_else(|| "?".into()),
                 a.key.map(|k| k.camelot()).unwrap_or_else(|| "?".into()),
+                a.lufs
+                    .map(|l| format!("{l:.1}"))
+                    .unwrap_or_else(|| "?".into()),
                 a.grid
                     .map(|g| format!("starts at {:.3} s", g.start_secs))
                     .unwrap_or_else(|| "no grid".into()),

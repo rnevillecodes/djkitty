@@ -43,7 +43,7 @@ The system SHALL mark a track as missing when its file no longer exists at its s
 - **THEN** the track is shown as missing and cannot be loaded
 
 ### Requirement: Browse and search the library
-The system SHALL list library tracks with title, artist, BPM, key and duration, SHALL let the user sort by any of these columns, and SHALL filter the list by a text search over title and artist.
+The system SHALL list library tracks with title, artist, BPM, key, loudness (LUFS) and duration, SHALL let the user sort by any of these columns, and SHALL filter the list by a text search over title and artist.
 
 #### Scenario: Search by artist
 - **WHEN** the user types part of an artist's name into the search box

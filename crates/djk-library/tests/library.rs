@@ -28,6 +28,7 @@ fn record(secs: f64, bpm: Option<f32>, key: Option<Key>) -> AnalysisRecord {
         bpm,
         key,
         grid: None,
+        lufs: None,
     }
 }
 
@@ -248,6 +249,21 @@ fn sort_by_title_artist_key_and_duration() {
     .unwrap();
     assert_eq!(&titles(&lib, SortKey::Key)[..2], &["Bravo", "alpha"]);
     assert_eq!(&titles(&lib, SortKey::Duration)[..2], &["Bravo", "alpha"]);
+    // Loudness: alpha is louder than Bravo, so it comes last; tracks without a reading
+    // always sort last.
+    let mut louder = record(300.0, None, None);
+    louder.lufs = Some(-7.5);
+    let mut quieter = record(200.0, None, None);
+    quieter.lufs = Some(-11.0);
+    lib.save_analysis(rows[0].id, &louder, (0, 0)).unwrap();
+    lib.save_analysis(rows[1].id, &quieter, (0, 0)).unwrap();
+    assert_eq!(&titles(&lib, SortKey::Lufs)[..2], &["Bravo", "alpha"]);
+    let alpha = lib.tracks(&TrackQuery::default()).unwrap();
+    assert_eq!(
+        alpha.iter().find(|t| t.title == "alpha").unwrap().lufs,
+        Some(-7.5)
+    );
+    assert_eq!(lib.analysis(rows[1].id).unwrap().unwrap().lufs, Some(-11.0));
 }
 
 #[test]

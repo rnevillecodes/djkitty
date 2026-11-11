@@ -68,6 +68,10 @@ const MIGRATIONS: &[&str] = &[
     -- shows (none were made outside development).
     UPDATE tracks SET user_grid_bpm = NULL;
     "#,
+    // v5: integrated loudness (LUFS).
+    r#"
+    ALTER TABLE analysis ADD COLUMN lufs REAL;
+    "#,
 ];
 
 /// Apply any migrations newer than the database's `user_version`.

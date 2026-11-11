@@ -5,6 +5,7 @@ pub mod decode;
 pub mod dsp;
 pub mod grid;
 pub mod key;
+pub mod loudness;
 pub mod stats;
 pub mod waveform;
 
@@ -25,9 +26,11 @@ pub struct TrackAnalysis {
     pub waveform: Waveform,
     /// Where the beats and bars fall (needs a detected tempo).
     pub grid: Option<Beatgrid>,
+    /// Integrated loudness in LUFS (EBU R128); `None` for silent or very short tracks.
+    pub lufs: Option<f32>,
 }
 
-/// Decode a file once and compute stats, tempo, key and waveform.
+/// Decode a file once and compute stats, tempo, key, loudness and waveform.
 pub fn analyse_file(path: &Path) -> Result<TrackAnalysis, DecodeError> {
     let decoded = decode_file(path)?;
     Ok(analyse_decoded(path, &decoded))
@@ -47,5 +50,6 @@ pub fn analyse_decoded(path: &Path, decoded: &Decoded) -> TrackAnalysis {
         key: key::detect_key(&buf.samples, buf.sample_rate),
         waveform,
         grid,
+        lufs: loudness::integrated_lufs(&buf.samples, buf.sample_rate),
     }
 }

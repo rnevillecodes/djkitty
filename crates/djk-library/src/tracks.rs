@@ -16,6 +16,8 @@ pub struct TrackRow {
     pub artist: String,
     pub bpm: Option<f32>,
     pub key: Option<Key>,
+    /// Integrated loudness in LUFS.
+    pub lufs: Option<f32>,
     pub duration_secs: Option<f64>,
     pub missing: bool,
     pub analysed: bool,
@@ -34,6 +36,8 @@ pub struct AnalysisRecord {
     pub lossless: bool,
     pub bpm: Option<f32>,
     pub key: Option<Key>,
+    /// Integrated loudness in LUFS (EBU R128).
+    pub lufs: Option<f32>,
     /// The detected beatgrid (a user-edited grid is stored separately and wins).
     pub grid: Option<Beatgrid>,
 }
@@ -53,6 +57,7 @@ pub enum SortKey {
     Artist,
     Bpm,
     Key,
+    Lufs,
     Duration,
 }
 
@@ -67,7 +72,7 @@ pub struct TrackQuery {
 
 /// A user-edited grid's tempo takes precedence over the detected BPM.
 const TRACK_COLUMNS: &str = "t.id, t.path, t.title, t.artist, COALESCE(t.user_grid_bpm, a.bpm), \
-     a.key, a.duration_ms, t.missing, a.track_id IS NOT NULL";
+     a.key, a.duration_ms, t.missing, a.track_id IS NOT NULL, a.lufs";
 
 pub(crate) fn track_from_row(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
     let key: Option<i64> = r.get(5)?;
@@ -79,6 +84,7 @@ pub(crate) fn track_from_row(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
         artist: r.get(3)?,
         bpm: r.get::<_, Option<f64>>(4)?.map(|b| b as f32),
         key: key.and_then(|k| Key::from_code(k as u8)),
+        lufs: r.get::<_, Option<f64>>(9)?.map(|l| l as f32),
         duration_secs: duration_ms.map(|ms| ms as f64 / 1000.0),
         missing: r.get(7)?,
         analysed: r.get(8)?,
@@ -122,6 +128,7 @@ pub fn sort_tracks(rows: &mut [TrackRow], sort: SortKey, descending: bool) {
                 b.key.map(|k| (k.camelot_number(), k.mode as u8)),
                 descending,
             ),
+            SortKey::Lufs => opt(a.lufs, b.lufs, descending),
             SortKey::Duration => opt(a.duration_secs, b.duration_secs, descending),
         };
         primary.then_with(|| text(&a.title, &b.title, false))
@@ -235,7 +242,7 @@ impl Library {
             .conn
             .query_row(
                 "SELECT duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key, \
-                        grid_bpm, grid_start, grid_downbeat \
+                        grid_bpm, grid_start, grid_downbeat, lufs \
                  FROM analysis WHERE track_id = ?1",
                 [id.0],
                 |r| {
@@ -252,6 +259,7 @@ impl Library {
                             .get::<_, Option<i64>>(7)?
                             .and_then(|k| Key::from_code(k as u8)),
                         grid,
+                        lufs: r.get::<_, Option<f64>>(11)?.map(|l| l as f32),
                     })
                 },
             )
@@ -334,8 +342,9 @@ impl Library {
         self.conn.execute(
             "INSERT OR REPLACE INTO analysis \
              (track_id, duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key, \
-              source_size, source_mtime, version, grid_bpm, grid_start, grid_downbeat) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+              source_size, source_mtime, version, grid_bpm, grid_start, grid_downbeat, \
+              lufs) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
             params![
                 id.0,
                 (rec.duration_secs * 1000.0).round() as i64,
@@ -352,6 +361,7 @@ impl Library {
                 rec.grid.map(|g| g.bpm),
                 rec.grid.map(|g| g.start_secs),
                 rec.grid.map(|g| g.first_downbeat),
+                rec.lufs.map(f64::from),
             ],
         )?;
         self.conn.execute(

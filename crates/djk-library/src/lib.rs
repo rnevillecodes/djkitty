@@ -23,7 +23,8 @@ pub use schema::LATEST as SCHEMA_VERSION;
 ///    at 174 BPM reading as 116).
 /// 3: beatgrid detection (phase, downbeat and fine-tuned tempo).
 /// 4: beatgrids start at the first audible beat (bar 1 beat 1).
-pub const ANALYSIS_VERSION: i64 = 4;
+/// 5: integrated loudness (LUFS).
+pub const ANALYSIS_VERSION: i64 = 5;
 pub use sets::{SetId, SetSummary};
 pub use tracks::{
     AnalysisRecord, SortKey, StoredGrid, TrackQuery, TrackRow, matches_search as tracks_match,

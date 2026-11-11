@@ -1523,6 +1523,11 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             match &analysis {
                 Some(a) => {
                     kv("Duration", fmt_time(a.duration_secs));
+                    kv(
+                        "Loudness",
+                        a.lufs
+                            .map_or_else(|| "—".into(), |l| format!("{l:.1} LUFS")),
+                    );
                     kv("Format", a.format.clone());
                     kv(
                         "Sample rate",
@@ -1720,6 +1725,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         .column(Column::remainder().at_least(80.0).clip(true))
         .column(Column::exact(60.0))
         .column(Column::exact(50.0))
+        .column(Column::exact(60.0))
         .column(Column::exact(56.0).resizable(false));
     if app.scroll_to_selected
         && let Some(i) = selected
@@ -1768,6 +1774,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
             header.col(|ui| header_label(ui, "Artist", Some(SortKey::Artist), &mut clicked_sort));
             header.col(|ui| header_label(ui, "BPM", Some(SortKey::Bpm), &mut clicked_sort));
             header.col(|ui| header_label(ui, "Key", Some(SortKey::Key), &mut clicked_sort));
+            header.col(|ui| header_label(ui, "LUFS", Some(SortKey::Lufs), &mut clicked_sort));
             header.col(|ui| header_label(ui, "Time", Some(SortKey::Duration), &mut clicked_sort));
         })
         .body(|body| {
@@ -1822,6 +1829,14 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                     if let Some(k) = t.key {
                         resp.on_hover_text(k.standard());
                     }
+                });
+                row.col(|ui| {
+                    let text = match (t.lufs, t.analysed) {
+                        (Some(l), _) => format!("{l:.1}"),
+                        (None, true) => "?".into(),
+                        (None, false) => "…".into(),
+                    };
+                    ui.label(RichText::new(text).monospace());
                 });
                 row.col(|ui| {
                     ui.label(

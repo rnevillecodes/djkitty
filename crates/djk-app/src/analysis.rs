@@ -187,6 +187,7 @@ fn analyse_one(lib: &mut Library, id: TrackId, path: &Path) -> Option<AnalysisEv
                 bpm: a.bpm,
                 key: a.key,
                 grid: a.grid,
+                lufs: a.lufs,
             };
             match lib.save_analysis(id, &rec, stamp) {
                 Ok(()) => Some(AnalysisEvent::Analysed(id)),

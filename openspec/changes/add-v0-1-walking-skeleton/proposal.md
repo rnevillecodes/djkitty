@@ -8,7 +8,7 @@ djkitty aims to be an open-source DJ app "that grows with you": simple and intui
 
 - Create a new Rust application (Cargo workspace) for Windows first, structured so it can also build on macOS and Linux.
 - Import a music folder into a local library and persist it between sessions.
-- Analyse each track for duration, format, sample rate, bitrate, BPM and musical key (key is best-effort), and precompute waveform data.
+- Analyse each track for duration, format, sample rate, bitrate, BPM, musical key (key is best-effort) and loudness (LUFS), and precompute waveform data.
 - Create, rename, reorder and delete simple sets (ordered lists of library tracks) and show their total length.
 - Two decks, each able to load a track, play/pause, cue (return to cue point), and change tempo with a pitch fader (no key-lock in v0.1).
 - A mixer with per-channel volume faders, a 3-band EQ (high/mid/low, with full kill) per channel, a crossfader, and headphone pre-listen (cue) routed to a separate output pair.
@@ -25,7 +25,7 @@ Explicitly **out of scope** for v0.1: key-lock/time-stretch, scratching/jog-whee
 
 ### New Capabilities
 - `track-library`: importing folders of audio files, persisting tracks, browsing and searching the library.
-- `track-analysis`: extracting file stats (duration, format, sample rate, bitrate), detecting BPM and key, and producing waveform data for display.
+- `track-analysis`: extracting file stats (duration, format, sample rate, bitrate), detecting BPM and key, measuring loudness, and producing waveform data for display.
 - `set-management`: creating and editing sets as ordered, named lists of library tracks.
 - `deck-playback`: per-deck track loading, transport (play/pause/cue), tempo adjustment and position reporting.
 - `audio-mixing`: combining decks through channel faders and a crossfader into the master output, plus headphone cue routing to a separate output.

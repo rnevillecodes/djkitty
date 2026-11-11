@@ -9,10 +9,10 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 
 - **Library:** import files or a music folder (recursively) from the **Import** button, or **drag and drop files and folders**
   onto the window (dropping while a set is open also adds them to that set); search, and sort by title, artist,
-  BPM, key or duration. Missing files are flagged. Remove tracks from a set or from the library (right-click or
+  BPM, key, LUFS or duration. Missing files are flagged. Remove tracks from a set or from the library (right-click or
   `Del`); **djkitty never edits, moves or deletes your audio files**.
 - **Analysis in the background:** duration, format, sample rate, channels, bitrate,
-  **BPM**, **key** (Camelot and standard notation) and a **3-band waveform** for every
+  **BPM**, **key** (Camelot and standard notation), **loudness** (LUFS, EBU R128) and a **3-band waveform** for every
   track. Results are cached, so tracks are analysed once.
 - **Sets:** create, rename and delete sets; add tracks; drag tracks to reorder them; see
   track count and total duration.
@@ -58,7 +58,7 @@ directory, for example a throwaway test library.
 | `--test-tone [master\|headphones\|silent]` | Plays a 440 Hz tone for 3 s, then prints latency and overruns |
 | `--midi-monitor [filter]` | Logs raw MIDI from matching ports (default `DDJ-FLX2`); type hex bytes to send them |
 | `--import-folder <path>` | Imports and analyses a folder without opening the UI |
-| `--analyse [paths…]` | Prints BPM, key and beatgrid for files or folders (no paths: every library track, next to its stored BPM). Never saves results or touches audio files, but opening the library applies any pending database upgrade |
+| `--analyse [paths…]` | Prints BPM, key, loudness and beatgrid for files or folders (no paths: every library track, next to its stored BPM). Never saves results or touches audio files, but opening the library applies any pending database upgrade |
 
 ```bash
 cargo run -p djk-app -- --list-audio-devices

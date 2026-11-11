@@ -31,6 +31,17 @@ The system SHALL estimate each track's musical key on a best-effort basis and SH
 - **WHEN** a track is analysed and estimated to be in A minor
 - **THEN** its key is shown as `8A` with `A minor` visible in the details view
 
+### Requirement: Loudness measurement
+The system SHALL measure each track's integrated loudness as defined in ITU-R BS.1770-4 / EBU R128 (K-weighted, gated) and SHALL show it in LUFS to one decimal place. It SHALL show unknown for tracks that are silent or shorter than 400 ms.
+
+#### Scenario: Reference tone
+- **WHEN** a track holding a full-scale 997 Hz sine on both channels is analysed
+- **THEN** its loudness is shown as a value between −0.1 and 0.1 LUFS
+
+#### Scenario: Quiet intro does not lower the reading
+- **WHEN** a track starts with silence and a breakdown 30 dB quieter than the rest
+- **THEN** its loudness is within 0.2 LU of the loud part measured on its own
+
 ### Requirement: Background analysis
 The system SHALL analyse newly imported tracks in the background without blocking the UI or audio playback, SHALL show progress, and SHALL show results as each track finishes.
 

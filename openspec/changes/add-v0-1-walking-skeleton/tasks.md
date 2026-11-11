@@ -48,6 +48,7 @@
 - [x] 6.3 Implement BPM detection (spectral-flux onset envelope via rustfft, autocorrelation over 60–200 BPM with tempo prior, unknown on weak peaks); verify with tests on generated click tracks at 90, 120, 128 and 174 BPM (±1 BPM or half/double) and on noise (unknown)
 - [x] 6.4 Implement key detection (chromagram 50 Hz–5 kHz, Krumhansl–Schmuckler correlation, confidence threshold → unknown, Camelot + standard names); verify with tests on synthetic A-minor and C-major chord progressions and on noise (unknown)
 - [ ] 6.5 Implement the background analysis pool (`num_cpus - 2`, min 1, below-normal priority) that analyses un-analysed or changed tracks (size/mtime differ), stores results and waveforms, and reports progress; verify with tests that a restart does not re-analyse and a replaced file is re-analysed, and on hardware that 200 tracks analysing during playback cause no overruns
+- [x] 6.6 Measure integrated loudness (design §6: BS.1770 K-weighting, gated 400 ms blocks), store it (schema v5, analysis version 5) and show it as a sortable LUFS column and in the track details; verify with tests that the K-weighting matches the 48 kHz coefficients in BS.1770, a full-scale 1 kHz stereo tone reads 0 LUFS (±0.1) at 44.1, 48 and 96 kHz, halving the level drops 6 dB, silence and quiet sections are gated out, and LUFS sorts and round-trips through the library
 
 ## 7. Sets
 
