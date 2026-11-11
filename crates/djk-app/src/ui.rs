@@ -692,6 +692,15 @@ fn browser(app: &mut DjApp, ui: &mut Ui) {
                         let ctx = ui.ctx().clone();
                         app.start_import(vec![folder], None, &ctx);
                     }
+                    if ui.button("Import files…").clicked()
+                        && let Some(files) = rfd::FileDialog::new()
+                            .add_filter("Audio", djk_analysis::decode::SUPPORTED_EXTENSIONS)
+                            .pick_files()
+                        && !files.is_empty()
+                    {
+                        let ctx = ui.ctx().clone();
+                        app.start_import(files, None, &ctx);
+                    }
                 }
             }
             if let Some(pool) = &app.pool
