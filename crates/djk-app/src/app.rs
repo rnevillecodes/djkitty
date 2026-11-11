@@ -6,7 +6,7 @@ use std::sync::mpsc::Receiver;
 use std::time::Instant;
 
 use djk_analysis::Waveform;
-use djk_analysis::waveform::{Bin, OVERVIEW_BINS};
+use djk_analysis::waveform::OVERVIEW_BINS;
 use djk_controller::{Action, ControllerManager, DDJ_FLX2};
 use djk_core::{DeckId, LoadRequest, TrackId};
 use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery, TrackRow};
@@ -15,6 +15,7 @@ use crate::analysis::{AnalysisEvent, AnalysisPool};
 use crate::audio::AudioService;
 use crate::loader::{LoadJob, Loader};
 use crate::settings::Settings;
+use crate::waveview::{Peaks, WaveCol};
 
 /// What a deck shows about its track.
 #[derive(Default)]
@@ -22,8 +23,11 @@ pub struct DeckUi {
     /// Token of the track this info belongs to (matches the engine's `track_token`).
     pub token: u64,
     pub track: Option<TrackRow>,
+    /// Band data, used to tint the waveform.
     pub waveform: Option<Arc<Waveform>>,
-    pub overview: Vec<Bin>,
+    /// Min/max summary of the audio, used for the waveform shape.
+    pub peaks: Option<Arc<Peaks>>,
+    pub overview: Vec<WaveCol>,
     pub loading: bool,
     pub message: Option<(String, Instant)>,
     pub cue_held: bool,
@@ -60,7 +64,7 @@ pub struct DjApp {
     pub selected: Option<usize>,
     pub scroll_to_selected: bool,
     pub sets: Vec<SetSummary>,
-    pub details_overview: Option<(TrackId, Vec<Bin>)>,
+    pub details_overview: Option<(TrackId, Vec<WaveCol>)>,
     pub renaming: Option<(SetId, String)>,
     pub new_set_name: String,
     pub import: Option<ImportJob>,
@@ -425,14 +429,15 @@ impl DjApp {
             }
             self.decks[deck.index()].loading = false;
             match done.result {
-                Ok((decoded, waveform)) => {
+                Ok((decoded, waveform, peaks)) => {
                     if self.audio.state.deck(deck).playing {
                         self.deck_message(deck, "Deck is playing — pause it before loading");
                         continue;
                     }
                     let ui = &mut self.decks[deck.index()];
-                    ui.overview = waveform.overview(OVERVIEW_BINS);
+                    ui.overview = crate::waveview::overview_cols(&peaks, &waveform, OVERVIEW_BINS);
                     ui.waveform = Some(Arc::new(waveform));
+                    ui.peaks = Some(Arc::new(peaks));
                     if !self.audio.load(LoadRequest {
                         deck,
                         buffer: decoded.buffer,
@@ -512,7 +517,7 @@ impl DjApp {
             && let Some(lib) = &self.library
         {
             let bins = Waveform::load(&lib.waveform_path(id))
-                .map(|w| w.overview(400))
+                .map(|w| crate::waveview::cols_from_bins(&w.overview(400)))
                 .unwrap_or_default();
             self.details_overview = Some((id, bins));
         }

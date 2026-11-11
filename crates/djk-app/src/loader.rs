@@ -7,6 +7,8 @@ use djk_analysis::waveform::BINS_PER_SEC;
 use djk_analysis::{Decoded, Waveform};
 use djk_core::DeckId;
 
+use crate::waveview::Peaks;
+
 pub struct LoadJob {
     pub deck: DeckId,
     pub path: PathBuf,
@@ -19,7 +21,9 @@ pub struct LoadJob {
 pub struct Loaded {
     pub deck: DeckId,
     pub token: u64,
-    pub result: Result<(Decoded, Waveform), String>,
+    /// The decoded audio, its band data (for tinting) and its min/max summary (for the
+    /// waveform shape).
+    pub result: Result<(Decoded, Waveform, Peaks), String>,
 }
 
 pub struct Loader {
@@ -50,7 +54,11 @@ impl Loader {
                                 let _ = w.save(&job.waveform_cache);
                                 w
                             });
-                            (decoded, waveform)
+                            let peaks = Peaks::from_stereo(
+                                &decoded.buffer.samples,
+                                decoded.buffer.sample_rate,
+                            );
+                            (decoded, waveform, peaks)
                         })
                         .map_err(|e| e.to_string());
                     let done = Loaded {

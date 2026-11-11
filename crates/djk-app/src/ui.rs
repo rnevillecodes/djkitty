@@ -90,15 +90,15 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
     for deck in DeckId::ALL {
         let s = *state.deck(deck);
         let pos = display_position_secs(&state, &s, now);
-        let wf = app.decks[deck.index()]
-            .waveform
-            .clone()
-            .filter(|_| s.loaded);
+        let d = &app.decks[deck.index()];
+        let peaks = d.peaks.clone().filter(|_| s.loaded);
+        let bands = d.waveform.clone().filter(|_| s.loaded);
         let cue_secs = s.loaded.then(|| s.cue / f64::from(s.track_rate.max(1)));
         let lane = waveview::scrolling(
             ui,
             Vec2::new(width, lane_h),
-            wf.as_deref(),
+            peaks.as_deref(),
+            bands.as_deref(),
             pos,
             cue_secs,
             theme::deck_colour(deck),

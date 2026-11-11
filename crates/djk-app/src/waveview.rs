@@ -1,6 +1,9 @@
 //! Waveform drawing: the scrolling deck lanes and the whole-track overview.
 //!
-//! Both are drawn one column per *physical* pixel, so they stay sharp on high-DPI screens.
+//! Waveforms are drawn the way audio editors do it: one hairline per *physical* pixel,
+//! spanning the lowest to the highest sample in that slice of time, so the true shape
+//! (transients, asymmetry) shows. Each hairline is tinted by the balance of low, mid and
+//! high energy at that moment, so kicks and hats are easy to tell apart.
 
 use djk_analysis::Waveform;
 use djk_analysis::waveform::Bin;
@@ -14,50 +17,165 @@ pub const DEFAULT_WINDOW_SECS: f64 = 6.0;
 pub const MIN_WINDOW_SECS: f64 = 1.5;
 pub const MAX_WINDOW_SECS: f64 = 24.0;
 
-/// Visual amplitude curve for a stored 0–255 peak (lifts quiet detail).
-fn amp(v: f32) -> f32 {
-    (v / 255.0).sqrt()
+/// Lowest and highest sample (−1 to 1) over a slice of audio.
+pub type Span = (f32, f32);
+
+/// A min/max summary of a track's audio (mono mix) in fixed blocks of frames, built
+/// once on load. Fine enough for any lane zoom level (32 frames is under 1 ms).
+pub struct Peaks {
+    pub rate: u32,
+    pub blocks: Vec<Span>,
+    /// Display gain: scales the track's loudest sample to full height (at most
+    /// [`MAX_DISPLAY_GAIN`]), so quiet tracks stay readable. Display only, not audio.
+    pub gain: f32,
 }
 
-/// Add one column of three stacked band bars centred on `mid_y`.
-fn column(mesh: &mut Mesh, x0: f32, x1: f32, mid_y: f32, half_h: f32, b: [f32; 3], dim: f32) {
-    let layers = [
-        (amp(b[0]), theme::BAND_LOW),
-        (amp(b[1]) * 0.8, theme::BAND_MID),
-        (amp(b[2]) * 0.55, theme::BAND_HIGH),
-    ];
-    for (a, c) in layers {
-        if a <= 0.01 {
-            continue;
-        }
-        let h = a * half_h;
-        let rect = Rect::from_min_max(Pos2::new(x0, mid_y - h), Pos2::new(x1, mid_y + h));
-        mesh.add_colored_rect(rect, c.gamma_multiply(dim));
+/// Largest display gain for quiet tracks (8x is +18 dB).
+pub const MAX_DISPLAY_GAIN: f32 = 8.0;
+
+fn display_gain(peak: f32) -> f32 {
+    if peak <= 1e-6 {
+        1.0
+    } else {
+        (0.98 / peak).clamp(1.0, MAX_DISPLAY_GAIN)
     }
 }
 
-fn max_bins(bins: &[Bin]) -> [f32; 3] {
-    let m = bins.iter().fold([0u8; 3], |a, b| {
-        [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
-    });
-    m.map(f32::from)
+impl Peaks {
+    /// Frames summarised by each block.
+    pub const BLOCK: usize = 32;
+
+    /// Summarise interleaved stereo audio.
+    pub fn from_stereo(samples: &[f32], rate: u32) -> Self {
+        let blocks = samples
+            .chunks(Self::BLOCK * 2)
+            .map(|chunk| {
+                chunk
+                    .chunks_exact(2)
+                    .map(|f| 0.5 * (f[0] + f[1]))
+                    .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
+            })
+            .map(|(lo, hi)| if lo > hi { (0.0, 0.0) } else { (lo, hi) })
+            .collect::<Vec<Span>>();
+        let peak = blocks
+            .iter()
+            .fold(0.0f32, |m, &(lo, hi)| m.max(lo.abs()).max(hi.abs()));
+        Self {
+            rate,
+            blocks,
+            gain: display_gain(peak),
+        }
+    }
+
+    pub fn duration_secs(&self) -> f64 {
+        (self.blocks.len() * Self::BLOCK) as f64 / f64::from(self.rate.max(1))
+    }
+
+    /// Min/max over `[t0, t1)` seconds (at least one block), or `None` outside the track.
+    fn span(&self, t0: f64, t1: f64) -> Option<Span> {
+        let per_sec = f64::from(self.rate) / Self::BLOCK as f64;
+        let n = self.blocks.len();
+        let (f0, f1) = (t0 * per_sec, t1 * per_sec);
+        if f1 < 0.0 || f0 >= n as f64 || n == 0 {
+            return None;
+        }
+        let i0 = f0.floor().max(0.0) as usize;
+        let i1 = (f1.ceil() as usize).clamp(i0 + 1, n);
+        let (lo, hi) = merge_spans(&self.blocks[i0..i1]);
+        Some((lo * self.gain, hi * self.gain))
+    }
 }
 
-/// Value of the waveform over `[t0, t1)` seconds: the peak of the covered bins when the
-/// span covers at least one bin, otherwise a linear interpolation between neighbours, so
-/// zoomed-in views are smooth rather than stepped.
+fn merge_spans(spans: &[Span]) -> Span {
+    spans
+        .iter()
+        .fold((0.0f32, 0.0f32), |(lo, hi), &(l, h)| (lo.min(l), hi.max(h)))
+}
+
+/// One overview column: its min/max and the band balance used for its tint.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct WaveCol {
+    pub span: Span,
+    pub bands: [f32; 3],
+}
+
+/// About `n` overview columns from a deck's audio summary and band data.
+pub fn overview_cols(peaks: &Peaks, bands: &Waveform, n: usize) -> Vec<WaveCol> {
+    let total = peaks.blocks.len();
+    if total == 0 || n == 0 {
+        return Vec::new();
+    }
+    let per = total.div_ceil(n).max(1);
+    let dur = peaks.duration_secs().max(1e-9);
+    peaks
+        .blocks
+        .chunks(per)
+        .enumerate()
+        .map(|(i, chunk)| {
+            let t0 = (i * per * Peaks::BLOCK) as f64 / f64::from(peaks.rate);
+            let t1 = t0 + (chunk.len() * Peaks::BLOCK) as f64 / f64::from(peaks.rate);
+            let (lo, hi) = merge_spans(chunk);
+            WaveCol {
+                span: (lo * peaks.gain, hi * peaks.gain),
+                bands: sample(bands, t0.min(dur), t1.min(dur)).unwrap_or_default(),
+            }
+        })
+        .collect()
+}
+
+/// Overview columns from band data alone (used where the audio isn't loaded, like the
+/// track details panel): the loudest band stands in for the min/max.
+pub fn cols_from_bins(bins: &[Bin]) -> Vec<WaveCol> {
+    let loudest = |b: &Bin| f32::from(b[0].max(b[1]).max(b[2])) / 255.0;
+    let gain = display_gain(bins.iter().map(loudest).fold(0.0, f32::max));
+    bins.iter()
+        .map(|b| {
+            let m = loudest(b) * gain;
+            WaveCol {
+                span: (-m, m),
+                bands: b.map(f32::from),
+            }
+        })
+        .collect()
+}
+
+/// Tint for a slice of audio: the band colours blended by their share of the energy.
+/// Highs carry less energy than lows for the same loudness, so they are weighted up.
+pub fn band_colour(b: [f32; 3]) -> Color32 {
+    let w = [b[0], b[1] * 1.3, b[2] * 2.0];
+    let sum: f32 = w.iter().sum();
+    if sum < 1.0 {
+        return theme::BAND_HIGH;
+    }
+    let colours = [theme::BAND_LOW, theme::BAND_MID, theme::BAND_HIGH];
+    let ch = |f: fn(&Color32) -> u8| {
+        let v: f32 = colours
+            .iter()
+            .zip(w)
+            .map(|(c, wk)| f32::from(f(c)) * wk)
+            .sum();
+        (v / sum).round() as u8
+    };
+    Color32::from_rgb(ch(Color32::r), ch(Color32::g), ch(Color32::b))
+}
+
+/// Band peaks over `[t0, t1)` seconds: the peak of the covered bins when the span covers
+/// at least one bin, otherwise a linear interpolation between neighbours.
 fn sample(wf: &Waveform, t0: f64, t1: f64) -> Option<[f32; 3]> {
     let bps = f64::from(wf.bins_per_sec);
     let n = wf.bins.len();
     let f0 = t0 * bps;
     let f1 = t1 * bps;
-    if f1 < 0.0 || f0 >= n as f64 {
+    if f1 < 0.0 || f0 >= n as f64 || n == 0 {
         return None;
     }
     if f1 - f0 >= 1.0 {
         let i0 = f0.floor().max(0.0) as usize;
         let i1 = (f1.ceil() as usize).clamp(i0 + 1, n);
-        return Some(max_bins(&wf.bins[i0..i1]));
+        let m = wf.bins[i0..i1].iter().fold([0u8; 3], |a, b| {
+            [a[0].max(b[0]), a[1].max(b[1]), a[2].max(b[2])]
+        });
+        return Some(m.map(f32::from));
     }
     let centre = (0.5 * (f0 + f1) - 0.5).clamp(0.0, (n - 1) as f64);
     let i = centre.floor() as usize;
@@ -69,6 +187,31 @@ fn sample(wf: &Waveform, t0: f64, t1: f64) -> Option<[f32; 3]> {
     }))
 }
 
+/// Add one hairline column spanning `span` (−1 to 1, positive up) around `mid_y`.
+/// Silence still draws a one-pixel line so the waveform reads as continuous.
+#[allow(clippy::too_many_arguments)]
+fn hairline(
+    mesh: &mut Mesh,
+    x0: f32,
+    w: f32,
+    mid_y: f32,
+    half_h: f32,
+    span: Span,
+    colour: Color32,
+) {
+    let mut top = mid_y - span.1.clamp(-1.0, 1.0) * half_h;
+    let mut bottom = mid_y - span.0.clamp(-1.0, 1.0) * half_h;
+    if bottom - top < w {
+        let c = 0.5 * (top + bottom);
+        top = c - 0.5 * w;
+        bottom = c + 0.5 * w;
+    }
+    mesh.add_colored_rect(
+        Rect::from_min_max(Pos2::new(x0, top), Pos2::new(x0 + w, bottom)),
+        colour,
+    );
+}
+
 /// Scrolling waveform lane centred on a fixed playhead at `position_secs`.
 ///
 /// Returns the lane's response; hovering it and scrolling changes `window_secs` (zoom).
@@ -76,7 +219,8 @@ fn sample(wf: &Waveform, t0: f64, t1: f64) -> Option<[f32; 3]> {
 pub fn scrolling(
     ui: &mut Ui,
     size: Vec2,
-    waveform: Option<&Waveform>,
+    peaks: Option<&Peaks>,
+    bands: Option<&Waveform>,
     position_secs: f64,
     cue_secs: Option<f64>,
     accent: Color32,
@@ -114,21 +258,30 @@ pub fn scrolling(
         Stroke::new(1.0, theme::RAISED),
     );
 
-    if let Some(wf) = waveform {
+    if let Some(p) = peaks {
         let mut mesh = Mesh::default();
         for c in 0..cols {
             let t0 = start + c as f64 * secs_per_col;
             let t1 = t0 + secs_per_col;
-            let Some(b) = sample(wf, t0, t1) else {
-                if t0 >= wf.duration_secs() {
+            let Some(span) = p.span(t0, t1) else {
+                if t0 >= p.duration_secs() {
                     break;
                 }
                 continue;
             };
-            // Already-played audio is dimmed slightly.
-            let dim = if t1 < position_secs { 0.55 } else { 1.0 };
+            let b = bands.and_then(|w| sample(w, t0, t1)).unwrap_or_default();
+            // Already-played audio is dimmed.
+            let dim = if t1 < position_secs { 0.5 } else { 1.0 };
             let x0 = rect.left() + c as f32 * col_w;
-            column(&mut mesh, x0, x0 + col_w, mid_y, half_h, b, dim);
+            hairline(
+                &mut mesh,
+                x0,
+                col_w,
+                mid_y,
+                half_h,
+                span,
+                band_colour(b).gamma_multiply(dim),
+            );
         }
         painter.add(egui::Shape::mesh(mesh));
     } else {
@@ -184,7 +337,7 @@ pub struct OverviewResponse {
 pub fn overview(
     ui: &mut Ui,
     size: Vec2,
-    bins: &[Bin],
+    cols_in: &[WaveCol],
     position_frac: Option<f64>,
     cue_frac: Option<f64>,
     accent: Color32,
@@ -199,10 +352,10 @@ pub fn overview(
     let painter = ui.painter_at(rect);
     painter.rect_filled(rect, 3.0, theme::BG);
     let mid_y = rect.center().y;
-    let half_h = rect.height() * 0.45;
-    if !bins.is_empty() {
+    let half_h = rect.height() * 0.46;
+    if !cols_in.is_empty() {
         let mut mesh = Mesh::default();
-        let n = bins.len();
+        let n = cols_in.len();
         let ppp = ui.ctx().pixels_per_point();
         let cols = (rect.width().max(1.0) * ppp).ceil() as usize;
         let col_w = 1.0 / ppp;
@@ -212,7 +365,17 @@ pub fn overview(
             if i0 >= n {
                 break;
             }
-            let b = max_bins(&bins[i0..i1]);
+            let slice = &cols_in[i0..i1];
+            let span = slice.iter().fold((0.0f32, 0.0f32), |(lo, hi), w| {
+                (lo.min(w.span.0), hi.max(w.span.1))
+            });
+            let bands = slice.iter().fold([0.0f32; 3], |a, w| {
+                [
+                    a[0].max(w.bands[0]),
+                    a[1].max(w.bands[1]),
+                    a[2].max(w.bands[2]),
+                ]
+            });
             let frac = (c as f64 + 0.5) / cols as f64;
             let dim = if position_frac.is_some_and(|p| frac < p) {
                 0.5
@@ -220,7 +383,15 @@ pub fn overview(
                 1.0
             };
             let x0 = rect.left() + c as f32 * col_w;
-            column(&mut mesh, x0, x0 + col_w, mid_y, half_h, b, dim);
+            hairline(
+                &mut mesh,
+                x0,
+                col_w,
+                mid_y,
+                half_h,
+                span,
+                band_colour(bands).gamma_multiply(dim),
+            );
         }
         painter.add(egui::Shape::mesh(mesh));
     }
@@ -280,5 +451,49 @@ mod tests {
         let w = wf(vec![[1, 1, 1]; 10]);
         assert!(sample(&w, -2.0, -1.0).is_none());
         assert!(sample(&w, 5.0, 5.1).is_none());
+    }
+
+    #[test]
+    fn peaks_keep_signed_min_and_max_per_block() {
+        // One block of a positive-heavy wave, one of silence.
+        let mut s = Vec::new();
+        for i in 0..Peaks::BLOCK {
+            let v = if i == 3 {
+                0.9
+            } else if i == 7 {
+                -0.4
+            } else {
+                0.1
+            };
+            s.extend([v, v]);
+        }
+        s.extend(std::iter::repeat_n(0.0, Peaks::BLOCK * 2));
+        let p = Peaks::from_stereo(&s, 44_100);
+        assert_eq!(p.blocks.len(), 2);
+        assert_eq!(p.blocks[0], (-0.4, 0.9));
+        assert_eq!(p.blocks[1], (0.0, 0.0));
+        let secs = Peaks::BLOCK as f64 / 44_100.0;
+        let (lo, hi) = p.span(0.0, 2.0 * secs).unwrap();
+        assert!((lo - -0.4 * p.gain).abs() < 1e-6 && (hi - 0.9 * p.gain).abs() < 1e-6);
+        assert!(p.span(-1.0, -0.5).is_none());
+        assert!(p.span(10.0, 11.0).is_none());
+    }
+
+    #[test]
+    fn display_gain_lifts_quiet_tracks_within_limits() {
+        assert_eq!(display_gain(1.0), 1.0);
+        assert!((display_gain(0.49) - 2.0).abs() < 1e-3);
+        assert_eq!(display_gain(0.01), MAX_DISPLAY_GAIN);
+        assert_eq!(display_gain(0.0), 1.0);
+    }
+
+    #[test]
+    fn band_colour_follows_the_dominant_band() {
+        assert_eq!(band_colour([200.0, 0.0, 0.0]), theme::BAND_LOW);
+        assert_eq!(band_colour([0.0, 0.0, 200.0]), theme::BAND_HIGH);
+        // An even mix lands between the band colours.
+        let c = band_colour([100.0, 100.0, 100.0]);
+        assert_ne!(c, theme::BAND_LOW);
+        assert_ne!(c, theme::BAND_HIGH);
     }
 }
