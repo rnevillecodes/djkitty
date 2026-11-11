@@ -54,8 +54,11 @@ pub const DECK_KEYS: &[(&str, &str, &str)] = &[
 ];
 
 pub const GLOBAL_KEYS: &[(&str, &str)] = &[
-    ("↑ / ↓", "Move the track selection"),
-    ("Shift+← / Shift+→", "Load the selected track to deck A / B"),
+    ("Up / Down", "Move the track selection"),
+    (
+        "Shift+Left / Shift+Right",
+        "Load the selected track to deck A / B",
+    ),
     ("Ctrl+F", "Search"),
 ];
 

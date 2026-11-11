@@ -13,6 +13,7 @@ mod theme;
 mod ui;
 mod util;
 mod waveview;
+mod widgets;
 
 fn main() -> anyhow::Result<()> {
     let args: Vec<String> = std::env::args().skip(1).collect();

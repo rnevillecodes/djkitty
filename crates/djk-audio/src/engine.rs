@@ -78,6 +78,8 @@ pub struct Engine {
     overruns: u64,
     refused_loads: u64,
     frames_rendered: u64,
+    channel_peak: [f32; DECK_COUNT],
+    master_peak: [f32; 2],
 }
 
 impl Engine {
@@ -104,6 +106,8 @@ impl Engine {
             overruns: 0,
             refused_loads: 0,
             frames_rendered: 0,
+            channel_peak: [0.0; DECK_COUNT],
+            master_peak: [0.0; 2],
         };
         engine.publish(None);
         let handles = EngineHandles {
@@ -149,11 +153,21 @@ impl Engine {
         let channels = channels.max(1);
         let total_frames = out.len() / channels;
         let mut done = 0;
+        self.channel_peak = [0.0; DECK_COUNT];
+        self.master_peak = [0.0; 2];
         while done < total_frames {
             let n = (total_frames - done).min(CHUNK_FRAMES);
-            for (deck, buf) in self.decks.iter_mut().zip(self.scratch.iter_mut()) {
+            for ((deck, buf), peak) in self
+                .decks
+                .iter_mut()
+                .zip(self.scratch.iter_mut())
+                .zip(self.channel_peak.iter_mut())
+            {
                 let [l, r] = buf;
                 deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                for (a, b) in l[..n].iter().zip(&r[..n]) {
+                    *peak = peak.max(a.abs()).max(b.abs());
+                }
             }
             let gains = self.mixer.master_gains();
             let chunk = &mut out[done * channels..(done + n) * channels];
@@ -163,6 +177,8 @@ impl Engine {
                     (self.scratch[1][0][i], self.scratch[1][1][i]),
                 ];
                 let ((ml, mr), (hl, hr)) = self.mixer.mix(decks, &gains);
+                self.master_peak[0] = self.master_peak[0].max(ml.abs());
+                self.master_peak[1] = self.master_peak[1].max(mr.abs());
                 match channels {
                     1 => frame[0] = 0.5 * (ml + mr),
                     2 | 3 => {
@@ -261,6 +277,8 @@ impl Engine {
             overruns: self.overruns,
             refused_loads: self.refused_loads,
             frames_rendered: self.frames_rendered,
+            channel_peak: self.channel_peak,
+            master_peak: self.master_peak,
         }
     }
 
@@ -323,6 +341,41 @@ mod tests {
         assert!(s.decks[1].playing);
         assert_eq!(s.decks[1].track_token, 7);
         assert!(s.headphones_available());
+    }
+
+    #[test]
+    fn reports_pre_fader_channel_peaks_and_master_peaks() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
+        // Channel fader down: the channel meter still shows the signal, the master
+        // does not.
+        h.send(Command::SetChannelFader {
+            deck: DeckId::A,
+            value: 0.0,
+        });
+        h.send(Command::Play(DeckId::A));
+        let mut out = vec![0.0; 1024 * 2];
+        e.process(&mut out, 2, None);
+        let s = *h.state.read();
+        assert!(
+            (0.45..=0.5).contains(&s.channel_peak[0]),
+            "{}",
+            s.channel_peak[0]
+        );
+        assert_eq!(s.channel_peak[1], 0.0);
+        assert_eq!(s.master_peak, [0.0, 0.0]);
+
+        h.send(Command::SetChannelFader {
+            deck: DeckId::A,
+            value: 1.0,
+        });
+        e.process(&mut out, 2, None);
+        let s = *h.state.read();
+        assert!(
+            s.master_peak[0] > 0.4 && s.master_peak[0] <= 0.5,
+            "{:?}",
+            s.master_peak
+        );
     }
 
     #[test]

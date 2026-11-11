@@ -207,6 +207,12 @@ pub struct EngineState {
     /// Loads refused because the deck was playing.
     pub refused_loads: u64,
     pub frames_rendered: u64,
+    /// Peak absolute sample per deck over the last block, before the channel fader
+    /// (what a mixer's channel meter shows).
+    pub channel_peak: [f32; DECK_COUNT],
+    /// Peak absolute sample of the master output (left, right) over the last block,
+    /// after the limiter.
+    pub master_peak: [f32; 2],
 }
 
 impl Default for EngineState {
@@ -221,6 +227,8 @@ impl Default for EngineState {
             overruns: 0,
             refused_loads: 0,
             frames_rendered: 0,
+            channel_peak: [0.0; DECK_COUNT],
+            master_peak: [0.0; 2],
         }
     }
 }

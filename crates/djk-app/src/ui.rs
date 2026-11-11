@@ -6,17 +6,18 @@ use std::time::{Duration, Instant};
 use djk_controller::FaderTarget;
 use djk_core::{Bpm, Command, DeckId, DeckState, EngineState, MixerState, PITCH_RANGE};
 use djk_library::SortKey;
-use egui::{Align, Color32, Layout, RichText, Sense, Ui, Vec2};
+use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::{DjApp, View};
 use crate::theme;
 use crate::util::fmt_time;
 use crate::waveview;
+use crate::widgets;
 
 /// Height of the row holding the two deck panels and the mixer.
 const DECKS_ROW_HEIGHT: f32 = 222.0;
-const MIXER_WIDTH: f32 = 230.0;
+const MIXER_WIDTH: f32 = 250.0;
 const MESSAGE_SECS: u64 = 5;
 /// Gap between the stacked waveform lanes.
 const LANE_GAP: f32 = 4.0;
@@ -121,18 +122,60 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
-fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> egui::Rect {
-    egui::Frame::new()
-        .fill(theme::PANEL)
-        .stroke(egui::Stroke::new(1.0, accent.gamma_multiply(0.25)))
-        .corner_radius(8)
-        .inner_margin(8)
+/// A panel with a soft top-lit surface and a thin accent strip along the top edge.
+fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
+    let background = ui.painter().add(egui::Shape::Noop);
+    let rect = egui::Frame::new()
+        .stroke(egui::Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2e, 0x37)))
+        .corner_radius(10)
+        .inner_margin(egui::Margin {
+            left: 10,
+            right: 10,
+            top: 10,
+            bottom: 8,
+        })
         .show(ui, |ui| {
             ui.set_min_size(ui.available_size().max(Vec2::ZERO));
             add(ui)
         })
         .response
-        .rect
+        .rect;
+
+    // Paint the background behind the content, now that the size is known.
+    let mut shapes = vec![egui::Shape::rect_filled(rect, 10, theme::PANEL)];
+    let sheen = Rect::from_min_size(
+        rect.min + Vec2::new(6.0, 1.0),
+        Vec2::new(rect.width() - 12.0, 46.0),
+    );
+    let strip = Rect::from_min_size(
+        rect.min + Vec2::new(14.0, 0.0),
+        Vec2::new(rect.width() - 28.0, 2.0),
+    );
+    let mut mesh = egui::Mesh::default();
+    for (r, top, bottom) in [
+        (sheen, Color32::from_white_alpha(7), Color32::TRANSPARENT),
+        (
+            Rect::from_min_size(strip.min, Vec2::new(strip.width(), 18.0)),
+            accent.gamma_multiply(0.12),
+            Color32::TRANSPARENT,
+        ),
+    ] {
+        let i = mesh.vertices.len() as u32;
+        mesh.colored_vertex(r.left_top(), top);
+        mesh.colored_vertex(r.right_top(), top);
+        mesh.colored_vertex(r.right_bottom(), bottom);
+        mesh.colored_vertex(r.left_bottom(), bottom);
+        mesh.add_triangle(i, i + 1, i + 2);
+        mesh.add_triangle(i, i + 2, i + 3);
+    }
+    shapes.push(egui::Shape::mesh(mesh));
+    shapes.push(egui::Shape::rect_filled(
+        strip,
+        1,
+        accent.gamma_multiply(0.85),
+    ));
+    ui.painter().set(background, egui::Shape::Vec(shapes));
+    rect
 }
 
 /// Drag-and-drop payload for a library track being dragged onto a deck.
@@ -140,6 +183,10 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> egui::Rect {
 pub struct TrackDrag {
     pub id: djk_core::TrackId,
     pub title: String,
+    /// The row it came from, when dragged within a set (so it can be reordered).
+    pub from_row: Option<usize>,
+    /// False for missing files: they can be reordered but not loaded.
+    pub loadable: bool,
 }
 
 /// Make `rect` a drop target for library tracks. `deck_at` picks the deck for a pointer
@@ -152,7 +199,7 @@ fn track_drop_target(
     deck_at: impl Fn(egui::Pos2) -> DeckId,
 ) {
     let ctx = ui.ctx();
-    let Some(drag) = egui::DragAndDrop::payload::<TrackDrag>(ctx) else {
+    let Some(drag) = egui::DragAndDrop::payload::<TrackDrag>(ctx).filter(|d| d.loadable) else {
         return;
     };
     let Some(pos) = ctx.pointer_latest_pos().filter(|p| rect.contains(*p)) else {
@@ -182,300 +229,504 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
     let state = app.audio.state;
     let s = *state.deck(deck);
     let now = Instant::now();
+    let blink = (app.start_time.elapsed().as_millis() / 500) % 2 == 0;
     let rect = card(ui, accent, |ui| {
-        let width = ui.available_width();
-        // Header: deck letter, title/artist, BPM/key.
-        let info = app.decks[deck.index()]
-            .track
-            .as_ref()
-            .filter(|_| s.loaded || app.decks[deck.index()].loading)
-            .cloned();
-        ui.horizontal(|ui| {
-            ui.label(
-                RichText::new(deck.label())
-                    .size(22.0)
-                    .strong()
-                    .color(accent),
-            );
-            ui.vertical(|ui| {
-                ui.set_width((width - 170.0).max(40.0));
-                match &info {
-                    Some(t) => {
-                        ui.add(
-                            egui::Label::new(RichText::new(&t.title).size(15.0).strong())
-                                .truncate(),
-                        );
-                        let artist = if t.artist.is_empty() {
-                            "—"
-                        } else {
-                            &t.artist
-                        };
-                        ui.add(
-                            egui::Label::new(RichText::new(artist).color(theme::TEXT_DIM))
-                                .truncate(),
-                        );
-                    }
-                    None => {
-                        ui.label(RichText::new("No track loaded").color(theme::TEXT_DIM));
-                        ui.label(
-                            RichText::new("Load from the library below")
-                                .small()
-                                .color(theme::TEXT_DIM),
-                        );
-                    }
-                }
-            });
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                let key = info.as_ref().and_then(|t| t.key);
-                let bpm = info.as_ref().and_then(|t| t.bpm);
-                ui.vertical(|ui| {
-                    let bpm_text = bpm
-                        .map(|b| format!("{} BPM", Bpm(b).with_pitch(s.pitch)))
-                        .unwrap_or_else(|| "— BPM".into());
-                    ui.label(RichText::new(bpm_text).size(20.0).strong().monospace());
-                    ui.label(
-                        RichText::new(
-                            key.map(|k| k.camelot())
-                                .map(|c| format!("Key {c}"))
-                                .unwrap_or_else(|| "Key —".into()),
-                        )
-                        .color(theme::TEXT_DIM),
-                    )
-                    .on_hover_text(
-                        key.map(|k| k.standard())
-                            .unwrap_or_else(|| "Key unknown".into()),
-                    );
-                });
-            });
-        });
-
-        // Status line: loading / messages.
-        let d = &mut app.decks[deck.index()];
-        if d.message
-            .as_ref()
-            .is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(MESSAGE_SECS))
-        {
-            d.message = None;
-        }
-        if d.loading {
-            ui.horizontal(|ui| {
-                ui.spinner();
-                ui.label("Loading…");
-            });
-        } else if let Some((msg, _)) = &d.message {
-            ui.colored_label(theme::WARN, msg);
-        }
-
-        // Overview with click-to-seek while paused. (The scrolling waveform lives in the
-        // stacked lanes above the decks.)
-        let pos = display_position_secs(&state, &s, now);
-        let dur = s.duration_secs().max(1e-6);
-        let ov = waveview::overview(
-            ui,
-            Vec2::new(width, 44.0),
-            if s.loaded {
-                &app.decks[deck.index()].overview
-            } else {
-                &[]
-            },
-            s.loaded.then_some(pos / dur),
-            s.loaded.then(|| s.cue / s.track_frames.max(1) as f64),
-            accent,
-            s.loaded,
+        let full = ui.available_rect_before_wrap();
+        let pitch_w = 58.0;
+        let main = Rect::from_min_max(
+            full.min,
+            egui::pos2(full.right() - pitch_w - 10.0, full.bottom()),
         );
-        if let Some(frac) = ov.clicked_at {
-            if s.playing {
-                app.deck_message(deck, "Pause the deck to seek from the overview");
-            } else {
-                app.audio.send(Command::Seek {
-                    deck,
-                    frame: frac * s.track_frames as f64,
-                });
-            }
-        }
-        if s.loaded && !s.playing {
-            ov.response.on_hover_text("Click to seek");
-        }
+        let pitch_col =
+            Rect::from_min_max(egui::pos2(full.right() - pitch_w, full.top()), full.max);
 
-        // Time.
-        ui.horizontal(|ui| {
-            ui.label(RichText::new(fmt_time(pos)).size(18.0).monospace());
-            ui.label(
-                RichText::new(format!("-{}", fmt_time((s.duration_secs() - pos).max(0.0))))
-                    .size(18.0)
-                    .monospace()
-                    .color(theme::TEXT_DIM),
-            );
+        ui.scope_builder(egui::UiBuilder::new().max_rect(main), |ui| {
+            deck_main(app, ui, deck, &state, &s, now, blink);
         });
-
-        // Transport + pitch.
-        ui.horizontal(|ui| {
-            let big = Vec2::new(64.0, 40.0);
-            let cue_btn = ui.add_sized(
-                big,
-                egui::Button::new(RichText::new("CUE").strong())
-                    .fill(if s.previewing || (s.loaded && !s.playing && s.at_cue()) {
-                        theme::CUE_MARKER.gamma_multiply(0.45)
-                    } else {
-                        theme::RAISED
-                    })
-                    .sense(Sense::click_and_drag()),
-            );
-            let down = cue_btn.is_pointer_button_down_on();
-            let held = &mut app.decks[deck.index()].cue_held;
-            if down && !*held {
-                *held = true;
-                app.audio.send(Command::CuePress(deck));
-            } else if !down && *held {
-                *held = false;
-                app.audio.send(Command::CueRelease(deck));
-            }
-            cue_btn.on_hover_text("Paused: set cue / hold to preview · Playing: back to cue");
-
-            let (label, fill) = if s.playing && !s.previewing {
-                ("PAUSE", accent.gamma_multiply(0.6))
-            } else {
-                ("PLAY", theme::RAISED)
-            };
-            if ui
-                .add_sized(
-                    big,
-                    egui::Button::new(RichText::new(label).size(18.0)).fill(fill),
-                )
-                .on_hover_text("Play / pause")
-                .clicked()
-            {
-                app.audio.send(Command::TogglePlay(deck));
-            }
-
-            ui.add_space(8.0);
-            ui.vertical(|ui| {
-                let mut pitch_pct = s.pitch * 100.0;
-                let range = PITCH_RANGE * 100.0;
-                let resp = ui.add(
-                    egui::Slider::new(&mut pitch_pct, -range..=range)
-                        .step_by(0.05)
-                        .show_value(false)
-                        .text("Pitch"),
-                );
-                if let Some(pct) = slider_value(ui, &resp, pitch_pct, 0.0) {
-                    let pitch = pct / 100.0;
-                    app.audio.send(Command::SetPitch { deck, pitch });
-                    app.ui_fader(FaderTarget::Pitch(deck), pitch);
-                }
-                resp.on_hover_text(RESET_HINT);
-                ui.label(
-                    RichText::new(format!("{:+.1}%", s.pitch * 100.0))
-                        .monospace()
-                        .color(if s.pitch.abs() < 1e-4 {
-                            theme::TEXT_DIM
-                        } else {
-                            accent
-                        }),
-                );
-            });
+        ui.scope_builder(egui::UiBuilder::new().max_rect(pitch_col), |ui| {
+            pitch_column(app, ui, deck, &s);
         });
     });
     track_drop_target(app, ui, rect, |_| deck);
 }
 
-const RESET_HINT: &str = "Ctrl+click or double-click to reset";
+/// The deck's left part: header with the BPM screen, status, overview and transport.
+fn deck_main(
+    app: &mut DjApp,
+    ui: &mut Ui,
+    deck: DeckId,
+    state: &EngineState,
+    s: &DeckState,
+    now: Instant,
+    blink: bool,
+) {
+    let accent = theme::deck_colour(deck);
+    let width = ui.available_width();
+    let info = app.decks[deck.index()]
+        .track
+        .as_ref()
+        .filter(|_| s.loaded || app.decks[deck.index()].loading)
+        .cloned();
 
-/// Interpret a slider response: Ctrl+click (Cmd+click on macOS) or double-click resets to
-/// `default`; otherwise a changed value is returned as is.
-fn slider_value(ui: &Ui, resp: &egui::Response, value: f32, default: f32) -> Option<f32> {
-    let reset_modifier = ui.input(|i| i.modifiers.command);
-    let touched = resp.clicked() || resp.drag_started() || resp.changed();
-    if (reset_modifier && touched) || resp.double_clicked() {
-        Some(default)
-    } else if resp.changed() {
-        Some(value)
-    } else {
-        None
+    // Header: deck badge, title/artist, and the BPM/key screen.
+    let screen_w = 132.0;
+    ui.horizontal(|ui| {
+        let (badge, _) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
+        let p = ui.painter();
+        p.circle_filled(badge.center(), 16.0, accent.gamma_multiply(0.18));
+        p.circle_stroke(badge.center(), 16.0, egui::Stroke::new(1.5, accent));
+        p.text(
+            badge.center(),
+            egui::Align2::CENTER_CENTER,
+            deck.label(),
+            egui::FontId::proportional(18.0),
+            accent,
+        );
+        ui.vertical(|ui| {
+            ui.set_width((width - screen_w - 56.0).max(40.0));
+            ui.spacing_mut().item_spacing.y = 1.0;
+            match &info {
+                Some(t) => {
+                    ui.add(
+                        egui::Label::new(RichText::new(&t.title).size(16.0).strong()).truncate(),
+                    );
+                    let artist = if t.artist.is_empty() {
+                        "—"
+                    } else {
+                        &t.artist
+                    };
+                    ui.add(
+                        egui::Label::new(RichText::new(artist).color(theme::TEXT_DIM)).truncate(),
+                    );
+                }
+                None => {
+                    ui.label(
+                        RichText::new("No track loaded")
+                            .size(16.0)
+                            .color(theme::TEXT_DIM),
+                    );
+                    ui.label(
+                        RichText::new(match deck {
+                            DeckId::A => "Drag a track here, or select one and press Shift+Left",
+                            DeckId::B => "Drag a track here, or select one and press Shift+Right",
+                        })
+                        .small()
+                        .color(theme::TEXT_DIM),
+                    );
+                }
+            }
+        });
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let (r, resp) = ui.allocate_exact_size(Vec2::new(screen_w, 44.0), Sense::hover());
+            let p = ui.painter();
+            let inner = widgets::screen(p, r);
+            let key = info.as_ref().and_then(|t| t.key);
+            let bpm = info.as_ref().and_then(|t| t.bpm);
+            let bpm_text = bpm
+                .map(|b| format!("{}", Bpm(b).with_pitch(s.pitch)))
+                .unwrap_or_else(|| "—".into());
+            p.text(
+                egui::pos2(inner.right(), inner.top() - 3.0),
+                egui::Align2::RIGHT_TOP,
+                bpm_text,
+                egui::FontId::monospace(20.0),
+                theme::TEXT,
+            );
+            p.text(
+                egui::pos2(inner.left(), inner.top() - 1.0),
+                egui::Align2::LEFT_TOP,
+                "BPM",
+                egui::FontId::proportional(9.0),
+                theme::TEXT_DIM,
+            );
+            let key_text = key.map(|k| k.camelot()).unwrap_or_else(|| "—".into());
+            p.text(
+                egui::pos2(inner.left(), inner.bottom() + 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("KEY {key_text}"),
+                egui::FontId::proportional(11.0),
+                if key.is_some() {
+                    theme::KEY
+                } else {
+                    theme::TEXT_DIM
+                },
+            );
+            let pitch_col = if s.pitch.abs() < 1e-4 {
+                theme::TEXT_DIM
+            } else {
+                accent
+            };
+            p.text(
+                egui::pos2(inner.right(), inner.bottom() + 2.0),
+                egui::Align2::RIGHT_BOTTOM,
+                format!("{:+.1}%", s.pitch * 100.0),
+                egui::FontId::monospace(11.0),
+                pitch_col,
+            );
+            resp.on_hover_text(
+                key.map(|k| k.standard())
+                    .unwrap_or_else(|| "Key unknown".into()),
+            );
+        });
+    });
+
+    // Status line (fixed height so the layout doesn't jump).
+    let d = &mut app.decks[deck.index()];
+    if d.message
+        .as_ref()
+        .is_some_and(|(_, t)| t.elapsed() > Duration::from_secs(MESSAGE_SECS))
+    {
+        d.message = None;
     }
+    ui.allocate_ui(Vec2::new(width, 16.0), |ui| {
+        ui.set_height(16.0);
+        if d.loading {
+            ui.horizontal(|ui| {
+                ui.spinner();
+                ui.label(RichText::new("Loading…").small());
+            });
+        } else if let Some((msg, _)) = &d.message {
+            ui.label(RichText::new(msg).small().color(theme::WARN));
+        }
+    });
+
+    // Overview with click-to-seek while paused.
+    let pos = display_position_secs(state, s, now);
+    let dur = s.duration_secs().max(1e-6);
+    let ov = waveview::overview(
+        ui,
+        Vec2::new(width, 40.0),
+        if s.loaded {
+            &app.decks[deck.index()].overview
+        } else {
+            &[]
+        },
+        s.loaded.then_some(pos / dur),
+        s.loaded.then(|| s.cue / s.track_frames.max(1) as f64),
+        accent,
+        s.loaded,
+    );
+    if let Some(frac) = ov.clicked_at {
+        if s.playing {
+            app.deck_message(deck, "Pause the deck to seek from the overview");
+        } else {
+            app.audio.send(Command::Seek {
+                deck,
+                frame: frac * s.track_frames as f64,
+            });
+        }
+    }
+    if s.loaded && !s.playing {
+        ov.response.on_hover_text("Click to seek");
+    }
+
+    // Transport buttons and the time screen.
+    ui.add_space(4.0);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 6.0;
+        let paused_away = s.loaded && !s.playing && !s.at_cue();
+        let cue_lit = if s.previewing || (s.loaded && !s.playing && s.at_cue()) {
+            1.0
+        } else if paused_away && blink {
+            0.8
+        } else {
+            0.0
+        };
+        let cue_btn = widgets::transport_button(
+            ui,
+            50.0,
+            widgets::TransportIcon::Cue,
+            theme::CUE_MARKER,
+            cue_lit,
+            s.loaded,
+        );
+        let down = cue_btn.is_pointer_button_down_on();
+        let held = &mut app.decks[deck.index()].cue_held;
+        if down && !*held {
+            *held = true;
+            app.audio.send(Command::CuePress(deck));
+        } else if !down && *held {
+            *held = false;
+            app.audio.send(Command::CueRelease(deck));
+        }
+        cue_btn.on_hover_text("Paused: set cue / hold to preview · Playing: back to cue");
+
+        let play_lit = if s.playing && !s.previewing {
+            1.0
+        } else if s.loaded && blink {
+            0.8
+        } else {
+            0.0
+        };
+        let play = widgets::transport_button(
+            ui,
+            50.0,
+            widgets::TransportIcon::PlayPause,
+            theme::OK,
+            play_lit,
+            s.loaded,
+        );
+        if play.on_hover_text("Play / pause").clicked() {
+            app.audio.send(Command::TogglePlay(deck));
+        }
+
+        // Time screen.
+        let w = ui.available_width().max(60.0);
+        let (r, _) = ui.allocate_exact_size(Vec2::new(w, 50.0), Sense::hover());
+        let p = ui.painter();
+        let inner = widgets::screen(p, r.shrink2(Vec2::new(0.0, 3.0)));
+        p.text(
+            inner.left_top() + Vec2::new(0.0, -2.0),
+            egui::Align2::LEFT_TOP,
+            "ELAPSED",
+            egui::FontId::proportional(9.0),
+            theme::TEXT_DIM,
+        );
+        p.text(
+            egui::pos2(inner.left(), inner.bottom() + 3.0),
+            egui::Align2::LEFT_BOTTOM,
+            fmt_tenths(pos),
+            egui::FontId::monospace(20.0),
+            theme::TEXT,
+        );
+        p.text(
+            egui::pos2(inner.right(), inner.top() - 2.0),
+            egui::Align2::RIGHT_TOP,
+            "REMAIN",
+            egui::FontId::proportional(9.0),
+            theme::TEXT_DIM,
+        );
+        let remain = (s.duration_secs() - pos).max(0.0);
+        // Warn in the last 30 s, like CDJs.
+        let warn = s.loaded && s.playing && remain < 30.0;
+        p.text(
+            egui::pos2(inner.right(), inner.bottom() + 2.0),
+            egui::Align2::RIGHT_BOTTOM,
+            format!("-{}", fmt_tenths(remain)),
+            egui::FontId::monospace(15.0),
+            if warn && blink {
+                theme::DANGER
+            } else {
+                theme::TEXT_DIM
+            },
+        );
+    });
 }
+
+/// Vertical pitch fader with its readout (pulling down speeds up, as on CDJs).
+fn pitch_column(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
+    let accent = theme::deck_colour(deck);
+    ui.vertical_centered(|ui| {
+        ui.spacing_mut().item_spacing.y = 2.0;
+        ui.label(RichText::new("TEMPO").size(9.0).color(theme::TEXT_DIM));
+        ui.label(RichText::new("−").size(11.0).color(theme::TEXT_DIM));
+        let h = (ui.available_height() - 18.0).max(60.0);
+        let t = (s.pitch / PITCH_RANGE + 1.0) / 2.0;
+        let (resp, new) = widgets::fader(
+            ui,
+            Vec2::new(40.0, h),
+            true,
+            true,
+            t,
+            0.5,
+            widgets::FaderStyle {
+                accent,
+                ticks: 9,
+                centre_detent: true,
+                fill: false,
+            },
+        );
+        if let Some(t) = new {
+            let pitch = (t * 2.0 - 1.0) * PITCH_RANGE;
+            app.audio.send(Command::SetPitch { deck, pitch });
+            app.ui_fader(FaderTarget::Pitch(deck), pitch);
+        }
+        resp.on_hover_text(format!(
+            "Tempo ±{:.0}% · pull down to speed up · Shift for fine · {RESET_HINT}",
+            PITCH_RANGE * 100.0
+        ));
+        ui.label(RichText::new("+").size(11.0).color(theme::TEXT_DIM));
+    });
+}
+
+/// `m:ss.t` (or `h:mm:ss.t`), for the deck time screens.
+fn fmt_tenths(secs: f64) -> String {
+    let tenths = (secs.max(0.0) * 10.0).floor() as u64;
+    format!("{}.{}", fmt_time((tenths / 10) as f64), tenths % 10)
+}
+
+const RESET_HINT: &str = "Ctrl+click or double-click to reset";
 
 fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let state = app.audio.state;
     let m = state.mixer;
+    let defaults = MixerState::default();
+    let phones_ok = state.headphones_available();
+    let meters = app.meters;
     let rect = card(ui, theme::TEXT_DIM, |ui| {
-        // Headphone cue toggles.
-        ui.columns(2, |cols| {
-            for (i, deck) in DeckId::ALL.into_iter().enumerate() {
-                cols[i].vertical_centered(|ui| {
-                    let on = m.headphone_cue[deck.index()];
-                    let enabled = state.headphones_available();
-                    let btn = egui::Button::new(RichText::new(format!("Phones {}", deck.label())))
-                        .fill(if on {
-                            theme::deck_colour(deck).gamma_multiply(0.55)
-                        } else {
-                            theme::RAISED
-                        });
-                    let resp = ui.add_enabled(enabled, btn);
-                    if resp.clicked() {
-                        app.audio.send(Command::ToggleHeadphoneCue(deck));
-                    }
-                    resp.on_hover_text("Headphone cue").on_disabled_hover_text(
+        let full = ui.available_rect_before_wrap();
+        // Lay the strip out on a fixed grid, centred in the card.
+        let content_w = 194.0;
+        let x0 = full.left() + ((full.width() - content_w) / 2.0).max(0.0);
+        let y0 = full.top();
+        let at = |x: f32, y: f32, w: f32, h: f32| {
+            Rect::from_min_size(egui::pos2(x0 + x, y0 + y), Vec2::new(w, h))
+        };
+        let place = |ui: &mut Ui, r: Rect, add: &mut dyn FnMut(&mut Ui)| {
+            ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| add(ui));
+        };
+        let label = |ui: &Ui, centre_x: f32, y: f32, text: &str, colour: Color32| {
+            ui.painter().text(
+                egui::pos2(x0 + centre_x, y0 + y),
+                egui::Align2::CENTER_TOP,
+                text,
+                egui::FontId::proportional(9.0),
+                colour,
+            );
+        };
+
+        // Headphone cue toggles above each channel.
+        for (deck, cx) in [(DeckId::A, 77.0), (DeckId::B, 127.0)] {
+            place(ui, at(cx - 23.0, 0.0, 46.0, 22.0), &mut |ui| {
+                let on = m.headphone_cue[deck.index()];
+                let resp = widgets::led_toggle(
+                    ui,
+                    Vec2::new(46.0, 22.0),
+                    "CUE",
+                    on,
+                    theme::deck_colour(deck),
+                    phones_ok,
+                );
+                if resp.clicked() {
+                    app.audio.send(Command::ToggleHeadphoneCue(deck));
+                }
+                resp.on_hover_text(format!("Headphone cue for deck {}", deck.label()))
+                    .on_disabled_hover_text(
                         "Headphone cue needs a 4-channel device (like the DDJ-FLX2)",
                     );
-                });
-            }
-        });
+            });
+        }
 
-        // Vertical faders side by side: channel A, channel B, master, headphones.
-        ui.add_space(4.0);
-        let defaults = MixerState::default();
-        let phones_ok = state.headphones_available();
-        ui.columns(4, |cols| {
-            for (i, deck) in DeckId::ALL.into_iter().enumerate() {
-                let v = m.channel_fader[deck.index()];
-                let label = RichText::new(deck.label())
-                    .color(theme::deck_colour(deck))
-                    .strong();
-                let default = defaults.channel_fader[deck.index()];
-                if let Some(v) = vertical_fader(&mut cols[i], v, default, label, true) {
+        // Channel faders with their meters.
+        let fader_h = 112.0;
+        for (deck, fx, mx) in [(DeckId::A, 60.0, 50.0), (DeckId::B, 110.0, 148.0)] {
+            let i = deck.index();
+            widgets::meter(ui.painter(), at(mx, 32.0, 6.0, fader_h - 4.0), meters[i]);
+            place(ui, at(fx, 30.0, 34.0, fader_h), &mut |ui| {
+                let (resp, new) = widgets::fader(
+                    ui,
+                    Vec2::new(34.0, fader_h),
+                    true,
+                    false,
+                    m.channel_fader[i],
+                    defaults.channel_fader[i],
+                    widgets::FaderStyle {
+                        accent: theme::deck_colour(deck),
+                        ticks: 11,
+                        centre_detent: false,
+                        fill: true,
+                    },
+                );
+                if let Some(v) = new {
                     app.audio.send(Command::SetChannelFader { deck, value: v });
                     app.ui_fader(FaderTarget::Channel(deck), v);
                 }
-            }
-            let label = RichText::new("Master").small().color(theme::TEXT_DIM);
-            if let Some(v) = vertical_fader(
-                &mut cols[2],
+                resp.on_hover_text(format!("Channel {} · {RESET_HINT}", deck.label()));
+            });
+            label(
+                ui,
+                fx + 17.0,
+                30.0 + fader_h + 3.0,
+                deck.label(),
+                theme::deck_colour(deck),
+            );
+        }
+
+        // Master meter (left/right).
+        widgets::meter(ui.painter(), at(176.0, 32.0, 5.0, fader_h - 4.0), meters[2]);
+        widgets::meter(ui.painter(), at(185.0, 32.0, 5.0, fader_h - 4.0), meters[3]);
+        label(ui, 183.0, 30.0 + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
+
+        // Master and headphone level knobs.
+        let knobs = [
+            (
+                "LEVEL",
+                30.0,
                 m.master_level,
                 defaults.master_level,
-                label,
                 true,
-            ) {
-                app.audio.send(Command::SetMasterLevel(v));
-            }
-            let label = RichText::new("Phones").small().color(theme::TEXT_DIM);
-            if let Some(v) = vertical_fader(
-                &mut cols[3],
+                true,
+            ),
+            (
+                "PHONES",
+                92.0,
                 m.headphone_level,
                 defaults.headphone_level,
-                label,
                 phones_ok,
-            ) {
-                app.audio.send(Command::SetHeadphoneLevel(v));
-            }
-        });
+                false,
+            ),
+        ];
+        for (name, y, value, default, enabled, is_master) in knobs {
+            place(ui, at(1.0, y, 38.0, 38.0), &mut |ui| {
+                let (resp, new) = widgets::knob(ui, 38.0, value, default, theme::TEXT, enabled);
+                if let Some(v) = new {
+                    app.audio.send(if is_master {
+                        Command::SetMasterLevel(v)
+                    } else {
+                        Command::SetHeadphoneLevel(v)
+                    });
+                }
+                let what = if is_master {
+                    "Master level"
+                } else {
+                    "Headphone level"
+                };
+                resp.on_hover_text(format!("{what} · drag up/down · {RESET_HINT}"))
+                    .on_disabled_hover_text("Headphones need a 4-channel device");
+            });
+            label(ui, 20.0, y + 40.0, name, theme::TEXT_DIM);
+        }
 
         // Crossfader.
-        ui.add_space(2.0);
-        ui.vertical_centered(|ui| {
-            let mut x = m.crossfader;
-            ui.spacing_mut().slider_width = MIXER_WIDTH - 40.0;
-            let resp = ui.add(egui::Slider::new(&mut x, 0.0..=1.0).show_value(false));
-            if let Some(x) = slider_value(ui, &resp, x, MixerState::default().crossfader) {
+        let xf_w = full.width() - 36.0;
+        let xf = Rect::from_min_size(
+            egui::pos2(full.center().x - xf_w / 2.0, y0 + 166.0),
+            Vec2::new(xf_w, 28.0),
+        );
+        ui.painter().text(
+            egui::pos2(xf.left() - 10.0, xf.center().y),
+            egui::Align2::CENTER_CENTER,
+            "A",
+            egui::FontId::proportional(12.0),
+            theme::DECK_A,
+        );
+        ui.painter().text(
+            egui::pos2(xf.right() + 10.0, xf.center().y),
+            egui::Align2::CENTER_CENTER,
+            "B",
+            egui::FontId::proportional(12.0),
+            theme::DECK_B,
+        );
+        place(ui, xf, &mut |ui| {
+            let (resp, new) = widgets::fader(
+                ui,
+                xf.size(),
+                false,
+                false,
+                m.crossfader,
+                defaults.crossfader,
+                widgets::FaderStyle {
+                    accent: theme::TEXT,
+                    ticks: 11,
+                    centre_detent: true,
+                    fill: false,
+                },
+            );
+            if let Some(x) = new {
                 app.audio.send(Command::SetCrossfader(x));
                 app.ui_fader(FaderTarget::Crossfader, x);
             }
             resp.on_hover_text(format!("Crossfader · {RESET_HINT}"));
-            ui.label(
-                RichText::new("A  ·  crossfader  ·  B")
-                    .small()
-                    .color(theme::TEXT_DIM),
-            );
         });
     });
     // Dropping a track on the mixer loads the deck on that side.
@@ -483,33 +734,6 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     track_drop_target(app, ui, rect, |p| {
         if p.x < mid_x { DeckId::A } else { DeckId::B }
     });
-}
-
-/// One vertical 0–1 fader with a label underneath, centred in its column. Returns the new
-/// value when the user moved or reset it.
-fn vertical_fader(
-    ui: &mut Ui,
-    value: f32,
-    default: f32,
-    label: RichText,
-    enabled: bool,
-) -> Option<f32> {
-    ui.vertical_centered(|ui| {
-        let mut v = value;
-        ui.spacing_mut().slider_width = 84.0;
-        let resp = ui.add_enabled(
-            enabled,
-            egui::Slider::new(&mut v, 0.0..=1.0)
-                .vertical()
-                .show_value(false),
-        );
-        let out = slider_value(ui, &resp, v, default);
-        resp.on_hover_text(RESET_HINT)
-            .on_disabled_hover_text("Needs a 4-channel device (like the DDJ-FLX2)");
-        ui.label(label);
-        out
-    })
-    .inner
 }
 
 // ---------------------------------------------------------------- sidebar
@@ -823,6 +1047,8 @@ enum RowAction {
 
 fn track_table(app: &mut DjApp, ui: &mut Ui) {
     let in_set = matches!(app.view, View::Set(_));
+    // Row indices only match set positions when no search filter is hiding rows.
+    let can_reorder = in_set && app.query.search.trim().is_empty();
     let row_h = 26.0;
     let mut action: Option<RowAction> = None;
     let sort = app.query.sort;
@@ -852,8 +1078,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         .column(Column::remainder().at_least(80.0).clip(true))
         .column(Column::exact(60.0))
         .column(Column::exact(50.0))
-        .column(Column::exact(56.0))
-        .column(Column::exact(if in_set { 150.0 } else { 80.0 }).resizable(false));
+        .column(Column::exact(56.0).resizable(false));
     if app.scroll_to_selected
         && let Some(i) = selected
     {
@@ -902,7 +1127,6 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
             header.col(|ui| header_label(ui, "BPM", Some(SortKey::Bpm), &mut clicked_sort));
             header.col(|ui| header_label(ui, "Key", Some(SortKey::Key), &mut clicked_sort));
             header.col(|ui| header_label(ui, "Time", Some(SortKey::Duration), &mut clicked_sort));
-            header.col(|ui| header_label(ui, "Load", None, &mut clicked_sort));
         })
         .body(|body| {
             body.rows(row_h, rows.len(), |mut row| {
@@ -964,53 +1188,65 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                             .color(theme::TEXT_DIM),
                     );
                 });
-                row.col(|ui| {
-                    ui.spacing_mut().button_padding = egui::vec2(6.0, 1.0);
-                    for deck in DeckId::ALL {
-                        let b = egui::Button::new(
-                            RichText::new(deck.label())
-                                .color(theme::deck_colour(deck))
-                                .strong(),
-                        );
-                        if ui
-                            .add_enabled(!t.missing, b)
-                            .on_hover_text(format!("Load to deck {}", deck.label()))
-                            .clicked()
-                        {
-                            action = Some(RowAction::Load(deck, i));
-                        }
-                    }
-                    if in_set {
-                        if ui
-                            .add_enabled(i > 0, egui::Button::new("Up"))
-                            .on_hover_text("Move up")
-                            .clicked()
-                        {
-                            action = Some(RowAction::Move(i, i - 1));
-                        }
-                        if ui
-                            .add_enabled(i + 1 < rows.len(), egui::Button::new("Down"))
-                            .on_hover_text("Move down")
-                            .clicked()
-                        {
-                            action = Some(RowAction::Move(i, i + 1));
-                        }
-                    }
-                });
                 let resp = row.response();
                 if resp.clicked() && action.is_none() {
                     action = Some(RowAction::Select(i));
                 }
-                if !t.missing {
+                // Rows can be dragged onto a deck (to load) and, in a set, between rows
+                // (to reorder). Missing files can still be reordered, not loaded.
+                if !t.missing || can_reorder {
                     resp.dnd_set_drag_payload(TrackDrag {
                         id: t.id,
                         title: t.title.clone(),
+                        from_row: can_reorder.then_some(i),
+                        loadable: !t.missing,
                     });
                 }
+                if can_reorder
+                    && let Some(from) =
+                        egui::DragAndDrop::payload::<TrackDrag>(&resp.ctx).and_then(|d| d.from_row)
+                    && let Some(pos) = resp.ctx.pointer_latest_pos()
+                    && resp.rect.contains(pos)
+                {
+                    // Insert above or below this row depending on which half is hovered.
+                    let gap = if pos.y < resp.rect.center().y {
+                        i
+                    } else {
+                        i + 1
+                    };
+                    let y = if gap == i {
+                        resp.rect.top()
+                    } else {
+                        resp.rect.bottom()
+                    };
+                    let painter = resp.ctx.layer_painter(egui::LayerId::new(
+                        egui::Order::Foreground,
+                        egui::Id::unique("set_reorder_marker"),
+                    ));
+                    let x0 = resp.rect.left();
+                    let x1 = resp.rect.right();
+                    painter.line_segment(
+                        [egui::pos2(x0, y), egui::pos2(x1, y)],
+                        egui::Stroke::new(2.0, theme::DECK_A),
+                    );
+                    painter.circle_filled(egui::pos2(x0 + 3.0, y), 3.5, theme::DECK_A);
+                    if resp.ctx.input(|inp| inp.pointer.any_released()) {
+                        egui::DragAndDrop::clear_payload(&resp.ctx);
+                        // Index after the dragged row is taken out.
+                        let to = if gap > from { gap - 1 } else { gap };
+                        if to != from {
+                            action = Some(RowAction::Move(from, to));
+                        }
+                    }
+                }
                 resp.context_menu(|ui| {
-                    for deck in DeckId::ALL {
+                    for (deck, keys) in [(DeckId::A, "Shift+Left"), (DeckId::B, "Shift+Right")] {
                         if ui
-                            .button(format!("Load to deck {}", deck.label()))
+                            .add_enabled(
+                                !t.missing,
+                                egui::Button::new(format!("Load to deck {}", deck.label()))
+                                    .shortcut_text(keys),
+                            )
                             .clicked()
                         {
                             action = Some(RowAction::Load(deck, i));
@@ -1051,11 +1287,12 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
             .show(ui.ctx(), |ui| {
                 egui::Frame::popup(ui.style()).show(ui, |ui| {
                     ui.label(RichText::new(&drag.title).strong());
-                    ui.label(
-                        RichText::new("Drop on a deck to load")
-                            .small()
-                            .color(theme::TEXT_DIM),
-                    );
+                    let hint = match (drag.loadable, drag.from_row.is_some()) {
+                        (true, true) => "Drop on a deck to load, or between rows to reorder",
+                        (true, false) => "Drop on a deck to load",
+                        (false, _) => "Drop between rows to reorder",
+                    };
+                    ui.label(RichText::new(hint).small().color(theme::TEXT_DIM));
                 });
             });
     }
@@ -1098,7 +1335,9 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         Some(RowAction::Move(from, to)) => {
             if let View::Set(set) = app.view {
                 app.with_library(|lib| lib.move_in_set(set, from, to));
-                app.selected = Some(to);
+                // The reload keeps the selection by track id, looked up from the old
+                // order, so pointing at `from` keeps the moved track selected.
+                app.selected = Some(from);
             }
         }
         None => {}

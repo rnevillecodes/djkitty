@@ -21,6 +21,9 @@ pub const BAND_LOW: Color32 = Color32::from_rgb(0x2e, 0x7d, 0xff);
 pub const BAND_MID: Color32 = Color32::from_rgb(0xff, 0xa5, 0x2e);
 pub const BAND_HIGH: Color32 = Color32::from_rgb(0xf2, 0xf2, 0xf2);
 
+/// Musical key readouts.
+pub const KEY: Color32 = Color32::from_rgb(0xb7, 0x8c, 0xff);
+
 pub const PLAYHEAD: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const CUE_MARKER: Color32 = Color32::from_rgb(0xff, 0xd2, 0x3f);
 
@@ -53,6 +56,13 @@ pub fn apply(ctx: &egui::Context) {
     }
     v.widgets.inactive.bg_fill = RAISED;
     v.widgets.inactive.weak_bg_fill = RAISED;
+    v.widgets.inactive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x30, 0x34, 0x3d));
+    v.widgets.hovered.bg_fill = Color32::from_rgb(0x2d, 0x32, 0x3b);
+    v.widgets.hovered.weak_bg_fill = Color32::from_rgb(0x2d, 0x32, 0x3b);
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x4a, 0x50, 0x5c));
+    v.widgets.active.bg_fill = Color32::from_rgb(0x1a, 0x1d, 0x22);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(0x1a, 0x1d, 0x22);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x5a, 0x61, 0x6e));
     v.widgets.noninteractive.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x2a, 0x2e, 0x37));
     v.window_corner_radius = CornerRadius::same(10);
     ctx.set_visuals(v);

@@ -72,6 +72,9 @@ pub struct DjApp {
     /// Seconds of audio visible in the scrolling waveform lanes (shared, so both decks
     /// use the same time scale).
     pub wave_window_secs: f64,
+    /// Level meter ballistics: channel A, channel B, master left, master right.
+    pub meters: [crate::widgets::Ballistic; 4],
+    meters_updated: Instant,
 }
 
 impl DjApp {
@@ -128,6 +131,8 @@ impl DjApp {
             focus_search: false,
             show_shortcuts: false,
             wave_window_secs: crate::waveview::DEFAULT_WINDOW_SECS,
+            meters: Default::default(),
+            meters_updated: Instant::now(),
         };
         app.refresh_devices();
         app.reload_sets();
@@ -521,7 +526,25 @@ impl eframe::App for DjApp {
         }
         self.update_details();
 
-        let playing = self.audio.state.decks.iter().any(|d| d.playing);
+        let now = Instant::now();
+        let dt = now
+            .duration_since(self.meters_updated)
+            .as_secs_f32()
+            .min(0.25);
+        self.meters_updated = now;
+        let s = &self.audio.state;
+        let peaks = [
+            s.channel_peak[0],
+            s.channel_peak[1],
+            s.master_peak[0],
+            s.master_peak[1],
+        ];
+        for (m, p) in self.meters.iter_mut().zip(peaks) {
+            m.update(p, dt);
+        }
+
+        let playing = self.audio.state.decks.iter().any(|d| d.playing)
+            || self.meters.iter().any(|m| m.active());
         let busy = self.import.is_some() || self.pool.as_ref().is_some_and(|p| p.is_busy());
         if playing {
             ctx.request_repaint();
