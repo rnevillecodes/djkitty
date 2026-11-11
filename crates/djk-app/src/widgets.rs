@@ -627,6 +627,8 @@ pub mod icons {
     pub const PLUS: ImageSource<'static> = egui::include_image!("../assets/icons/plus.svg");
     pub const CHEVRON_DOWN: ImageSource<'static> =
         egui::include_image!("../assets/icons/chevron-down.svg");
+    pub const CHEVRON_UP: ImageSource<'static> =
+        egui::include_image!("../assets/icons/chevron-up.svg");
     pub const FILE: ImageSource<'static> = egui::include_image!("../assets/icons/file.svg");
     pub const FOLDER: ImageSource<'static> = egui::include_image!("../assets/icons/folder.svg");
 }

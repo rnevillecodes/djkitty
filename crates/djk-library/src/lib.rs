@@ -28,6 +28,7 @@ pub const ANALYSIS_VERSION: i64 = 5;
 pub use sets::{SetId, SetSummary};
 pub use tracks::{
     AnalysisRecord, SortKey, StoredGrid, TrackQuery, TrackRow, matches_search as tracks_match,
+    sort_tracks,
 };
 
 #[derive(Debug, thiserror::Error)]

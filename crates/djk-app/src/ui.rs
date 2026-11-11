@@ -1694,21 +1694,26 @@ enum RowAction {
 
 fn track_table(app: &mut DjApp, ui: &mut Ui) {
     let in_set = matches!(app.view, View::Set(_));
-    // Row indices only match set positions when no search filter is hiding rows.
-    let can_reorder = in_set && app.set_track_filter.trim().is_empty();
+    // Rows can be dragged to reorder only while the whole set shows in its own order.
+    let can_reorder = in_set && app.set_track_filter.trim().is_empty() && app.set_in_own_order();
     let row_h = 26.0;
     let mut action: Option<RowAction> = None;
-    let sort = app.query.sort;
-    let desc = app.query.descending;
-    let mut clicked_sort: Option<SortKey> = None;
+    let (sort, desc) = if in_set {
+        (app.set_sort, app.set_sort_desc)
+    } else {
+        (Some(app.query.sort), app.query.descending)
+    };
+    let mut clicked_sort: Option<Option<SortKey>> = None;
     let sets = app.sets.clone();
     let rows = &app.rows;
+    let row_numbers = &app.row_numbers;
     let selected = app.selected;
 
     // The columns always fill the list exactly: widths come from `app.track_columns`,
     // and dragging a divider (drawn after the table) moves width between neighbours.
     let area = ui.available_rect_before_wrap();
-    let num_w = if in_set { 30.0 } else { 0.0 };
+    // Room for the number and its sort arrow.
+    let num_w = if in_set { 42.0 } else { 0.0 };
     let fit_total = track_columns_total(ui, area, num_w);
     let widths = app.track_columns.fit(fit_total);
     let mut table = TableBuilder::new(ui)
@@ -1730,32 +1735,41 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
     }
     app.scroll_to_selected = false;
 
+    // Every header sorts: click once for ascending, again for descending. In a set, "#"
+    // goes back to the set's own order.
     let header_label =
-        |ui: &mut Ui, text: &str, key: Option<SortKey>, clicked: &mut Option<SortKey>| {
-            let arrow = match key {
-                Some(k) if k == sort && !in_set => {
-                    if desc {
-                        " (desc)"
-                    } else {
-                        " (asc)"
-                    }
-                }
-                _ => "",
-            };
-            let resp = ui.add(
-                egui::Label::new(
-                    RichText::new(format!("{text}{arrow}"))
-                        .strong()
-                        .color(theme::TEXT_DIM),
+        |ui: &mut Ui, text: &str, key: Option<SortKey>, clicked: &mut Option<Option<SortKey>>| {
+            let active = key == sort;
+            let resp = ui
+                .interact(
+                    ui.max_rect(),
+                    egui::Id::unique(("track_header", text)),
+                    Sense::click(),
                 )
-                .sense(if key.is_some() && !in_set {
-                    Sense::click()
+                .on_hover_text(match (active, desc) {
+                    (true, false) => "Sorted ascending; click to reverse",
+                    (true, true) => "Sorted descending; click to reverse",
+                    (false, _) => "Click to sort",
+                });
+            if resp.hovered() {
+                ui.set_cursor_icon(egui::CursorIcon::PointingHand);
+            }
+            let colour = if active || resp.hovered() {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            ui.add(egui::Label::new(RichText::new(text).strong().color(colour)).selectable(false));
+            if active {
+                let arrow = if desc {
+                    widgets::icons::CHEVRON_DOWN
                 } else {
-                    Sense::hover()
-                }),
-            );
+                    widgets::icons::CHEVRON_UP
+                };
+                ui.add(widgets::icon(arrow, 14.0, theme::DECK_A));
+            }
             if resp.clicked() {
-                *clicked = key;
+                *clicked = Some(key);
             }
         };
 
@@ -1787,7 +1801,8 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 };
                 row.col(|ui| {
                     if in_set {
-                        ui.label(RichText::new(format!("{}", i + 1)).color(theme::TEXT_DIM));
+                        let n = row_numbers.get(i).copied().unwrap_or(i + 1);
+                        ui.label(RichText::new(n.to_string()).color(theme::TEXT_DIM));
                     }
                 });
                 row.col(|ui| {

@@ -98,6 +98,11 @@ pub struct DjApp {
     pub set_filter: String,
     /// Text filtering the tracks of the open set (the library uses `query.search`).
     pub set_track_filter: String,
+    /// How the open set is sorted: `None` is the set's own order (the "#" column).
+    pub set_sort: Option<SortKey>,
+    pub set_sort_desc: bool,
+    /// Set position (from 1) of each row in the set view.
+    pub row_numbers: Vec<usize>,
     /// Track list column widths (title, artist, BPM, key, LUFS, time).
     pub track_columns: crate::columns::FitColumns,
     /// Level meter ballistics: channel A, channel B, master left, master right.
@@ -165,6 +170,9 @@ impl DjApp {
             wave_window_secs: crate::waveview::DEFAULT_WINDOW_SECS,
             set_filter: String::new(),
             set_track_filter: String::new(),
+            set_sort: None,
+            set_sort_desc: false,
+            row_numbers: Vec::new(),
             track_columns: crate::ui::track_columns(settings_columns.as_deref()),
             meters: Default::default(),
             meters_updated: Instant::now(),
@@ -206,14 +214,39 @@ impl DjApp {
             return;
         };
         let selected_id = self.selected.and_then(|i| self.rows.get(i)).map(|r| r.id);
+        let mut numbers = Vec::new();
         let rows = match self.view {
             View::Library => lib.tracks(&self.query),
-            View::Set(set) => lib.set_tracks(set).map(|mut rows| {
+            View::Set(set) => lib.set_tracks(set).map(|rows| {
+                // Number the tracks in set order before filtering and sorting.
                 let needle = self.set_track_filter.trim().to_lowercase();
-                rows.retain(|r| djk_library::tracks_match(r, &needle));
-                rows
+                let mut numbered: Vec<(usize, TrackRow)> = rows
+                    .into_iter()
+                    .enumerate()
+                    .map(|(i, r)| (i + 1, r))
+                    .filter(|(_, r)| djk_library::tracks_match(r, &needle))
+                    .collect();
+                match self.set_sort {
+                    Some(key) => {
+                        let mut rows: Vec<TrackRow> =
+                            numbered.iter().map(|(_, r)| r.clone()).collect();
+                        djk_library::sort_tracks(&mut rows, key, self.set_sort_desc);
+                        let position: std::collections::HashMap<TrackId, usize> =
+                            numbered.iter().map(|(n, r)| (r.id, *n)).collect();
+                        numbers = rows.iter().map(|r| position[&r.id]).collect();
+                        rows
+                    }
+                    None => {
+                        if self.set_sort_desc {
+                            numbered.reverse();
+                        }
+                        numbers = numbered.iter().map(|(n, _)| *n).collect();
+                        numbered.into_iter().map(|(_, r)| r).collect()
+                    }
+                }
             }),
         };
+        self.row_numbers = numbers;
         match rows {
             Ok(mut rows) => {
                 // Cheap missing-file check of the rows being shown.
@@ -251,14 +284,34 @@ impl DjApp {
         }
     }
 
-    pub fn set_sort(&mut self, key: SortKey) {
-        if self.query.sort == key {
-            self.query.descending = !self.query.descending;
-        } else {
-            self.query.sort = key;
-            self.query.descending = false;
+    /// Sort the list by a column; clicking the current column again reverses it. In a
+    /// set, `None` is the set's own order (the "#" column).
+    pub fn set_sort(&mut self, key: Option<SortKey>) {
+        match (self.view, key) {
+            (View::Library, None) => return,
+            (View::Library, Some(key)) => {
+                if self.query.sort == key {
+                    self.query.descending = !self.query.descending;
+                } else {
+                    self.query.sort = key;
+                    self.query.descending = false;
+                }
+            }
+            (View::Set(_), key) => {
+                if self.set_sort == key {
+                    self.set_sort_desc = !self.set_sort_desc;
+                } else {
+                    self.set_sort = key;
+                    self.set_sort_desc = false;
+                }
+            }
         }
         self.rows_dirty = true;
+    }
+
+    /// Whether the open set is shown in its own order, so rows can be dragged to reorder.
+    pub fn set_in_own_order(&self) -> bool {
+        self.set_sort.is_none() && !self.set_sort_desc
     }
 
     /// Run a library operation and report errors as a notice.

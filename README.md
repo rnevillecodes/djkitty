@@ -14,7 +14,7 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 - **Analysis in the background:** duration, format, sample rate, channels, bitrate,
   **BPM**, **key** (Camelot and standard notation), **loudness** (LUFS, EBU R128) and a **3-band waveform** for every
   track. Results are cached, so tracks are analysed once.
-- **Sets:** create, rename and delete sets; add tracks; drag tracks to reorder them; see
+- **Sets:** create, rename and delete sets; add tracks; sort by any column (click **#** for the set order); drag tracks to reorder them; see
   track count and total duration.
 - **Two decks:** load by dragging a track from the list onto a deck, its waveform or that
   side of the mixer (or with `Shift+←` / `Shift+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch

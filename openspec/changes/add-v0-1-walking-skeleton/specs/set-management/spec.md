@@ -36,7 +36,11 @@ The system SHALL let the user change the order of tracks within a set, and the o
 - **THEN** the set lists that track second and the order is the same after restarting the app
 
 ### Requirement: Set overview
-The system SHALL show each track's position, title, artist, BPM, key and duration within a set, plus the set's track count and total duration.
+The system SHALL show each track's position, title, artist, BPM, key, loudness and duration within a set, plus the set's track count and total duration. The user SHALL be able to sort the set's view by any of these columns without changing the set's order; sorting by position returns to the set's order, and tracks can only be dragged to reorder while the set is shown in its own order.
+
+#### Scenario: Sort a set by BPM
+- **WHEN** the user clicks the BPM header in a set and then the position header
+- **THEN** the tracks are first listed by BPM, each still showing its position in the set, and then listed in the set's order again, which is unchanged
 
 #### Scenario: Total duration
 - **WHEN** a set contains tracks of 5:00, 6:30 and 4:15
