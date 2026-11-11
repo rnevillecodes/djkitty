@@ -113,6 +113,7 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
             Vec2::new(width, lane_h),
             peaks.as_deref(),
             bands.as_deref(),
+            d.band_norm,
             pos,
             cue_secs,
             theme::deck_colour(deck),

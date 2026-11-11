@@ -93,10 +93,32 @@ fn merge_spans(spans: &[Span]) -> Span {
 }
 
 /// One overview column: its min/max and the band balance used for its tint.
+/// `bands` holds each band's level relative to its typical level in the track (see
+/// [`band_norms`]), so 1.0 means "as loud as this band usually is".
 #[derive(Clone, Copy, Debug, Default)]
 pub struct WaveCol {
     pub span: Span,
     pub bands: [f32; 3],
+}
+
+/// Each band's typical level in a track: its 90th-percentile peak. Tinting by level
+/// relative to this (rather than raw level) stops whichever band a track's mastering
+/// makes loudest from colouring everything; instead each moment shows which band is
+/// standing out *for this track* (kicks blue, hats mint, vocals and synths amber).
+pub fn band_norms(bins: &[Bin]) -> [f32; 3] {
+    std::array::from_fn(|k| {
+        let mut v: Vec<u8> = bins.iter().map(|b| b[k]).collect();
+        if v.is_empty() {
+            return 1.0;
+        }
+        let idx = (v.len() * 9 / 10).min(v.len() - 1);
+        let (_, p90, _) = v.select_nth_unstable(idx);
+        f32::from(*p90).max(1.0)
+    })
+}
+
+fn relative(b: [f32; 3], norms: [f32; 3]) -> [f32; 3] {
+    std::array::from_fn(|k| b[k] / norms[k])
 }
 
 /// About `n` overview columns from a deck's audio summary and band data.
@@ -105,6 +127,7 @@ pub fn overview_cols(peaks: &Peaks, bands: &Waveform, n: usize) -> Vec<WaveCol> 
     if total == 0 || n == 0 {
         return Vec::new();
     }
+    let norms = band_norms(&bands.bins);
     let per = total.div_ceil(n).max(1);
     let dur = peaks.duration_secs().max(1e-9);
     peaks
@@ -115,9 +138,10 @@ pub fn overview_cols(peaks: &Peaks, bands: &Waveform, n: usize) -> Vec<WaveCol> 
             let t0 = (i * per * Peaks::BLOCK) as f64 / f64::from(peaks.rate);
             let t1 = t0 + (chunk.len() * Peaks::BLOCK) as f64 / f64::from(peaks.rate);
             let (lo, hi) = merge_spans(chunk);
+            let b = mean_bands(bands, t0.min(dur), t1.min(dur)).unwrap_or_default();
             WaveCol {
                 span: (lo * peaks.gain, hi * peaks.gain),
-                bands: sample(bands, t0.min(dur), t1.min(dur)).unwrap_or_default(),
+                bands: relative(b, norms),
             }
         })
         .collect()
@@ -128,23 +152,30 @@ pub fn overview_cols(peaks: &Peaks, bands: &Waveform, n: usize) -> Vec<WaveCol> 
 pub fn cols_from_bins(bins: &[Bin]) -> Vec<WaveCol> {
     let loudest = |b: &Bin| f32::from(b[0].max(b[1]).max(b[2])) / 255.0;
     let gain = display_gain(bins.iter().map(loudest).fold(0.0, f32::max));
+    let norms = band_norms(bins);
     bins.iter()
         .map(|b| {
             let m = loudest(b) * gain;
             WaveCol {
                 span: (-m, m),
-                bands: b.map(f32::from),
+                bands: relative(b.map(f32::from), norms),
             }
         })
         .collect()
 }
 
-/// Tint for a slice of audio: the band colours blended by their share of the energy.
-/// Highs carry less energy than lows for the same loudness, so they are weighted up.
-pub fn band_colour(b: [f32; 3]) -> Color32 {
-    let w = [b[0], b[1] * 1.3, b[2] * 2.0];
+/// How strongly the most prominent band dominates the tint. A plain average (1) blends
+/// most of a track into the same muddy colour; a higher power lets kicks read clearly as
+/// low, hats as high and so on, while still shading genuinely mixed moments in between.
+const TINT_SHARPNESS: i32 = 4;
+
+/// Tint for a slice of audio, from each band's level relative to its typical level
+/// (`rel`, 1.0 = typical): the band colours blended by those levels, sharpened towards
+/// the band that stands out most.
+pub fn band_colour(rel: [f32; 3]) -> Color32 {
+    let w = rel.map(|v| v.max(0.0).powi(TINT_SHARPNESS));
     let sum: f32 = w.iter().sum();
-    if sum < 1.0 {
+    if sum <= 1e-6 {
         return theme::BAND_HIGH;
     }
     let colours = [theme::BAND_LOW, theme::BAND_MID, theme::BAND_HIGH];
@@ -157,6 +188,27 @@ pub fn band_colour(b: [f32; 3]) -> Color32 {
         (v / sum).round() as u8
     };
     Color32::from_rgb(ch(Color32::r), ch(Color32::g), ch(Color32::b))
+}
+
+/// Mean band levels over `[t0, t1)` seconds (at least one bin), for overview tints.
+fn mean_bands(wf: &Waveform, t0: f64, t1: f64) -> Option<[f32; 3]> {
+    let bps = f64::from(wf.bins_per_sec);
+    let n = wf.bins.len();
+    let (f0, f1) = (t0 * bps, t1 * bps);
+    if f1 < 0.0 || f0 >= n as f64 || n == 0 {
+        return None;
+    }
+    let i0 = f0.floor().max(0.0) as usize;
+    let i1 = (f1.ceil() as usize).clamp(i0 + 1, n);
+    let bins = &wf.bins[i0..i1];
+    let sum = bins.iter().fold([0.0f32; 3], |a, b| {
+        [
+            a[0] + f32::from(b[0]),
+            a[1] + f32::from(b[1]),
+            a[2] + f32::from(b[2]),
+        ]
+    });
+    Some(sum.map(|v| v / bins.len() as f32))
 }
 
 /// Band peaks over `[t0, t1)` seconds: the peak of the covered bins when the span covers
@@ -221,6 +273,7 @@ pub fn scrolling(
     size: Vec2,
     peaks: Option<&Peaks>,
     bands: Option<&Waveform>,
+    band_norm: [f32; 3],
     position_secs: f64,
     cue_secs: Option<f64>,
     accent: Color32,
@@ -280,7 +333,7 @@ pub fn scrolling(
                 mid_y,
                 half_h,
                 span,
-                band_colour(b).gamma_multiply(dim),
+                band_colour(relative(b, band_norm)).gamma_multiply(dim),
             );
         }
         painter.add(egui::Shape::mesh(mesh));
@@ -369,13 +422,11 @@ pub fn overview(
             let span = slice.iter().fold((0.0f32, 0.0f32), |(lo, hi), w| {
                 (lo.min(w.span.0), hi.max(w.span.1))
             });
-            let bands = slice.iter().fold([0.0f32; 3], |a, w| {
-                [
-                    a[0].max(w.bands[0]),
-                    a[1].max(w.bands[1]),
-                    a[2].max(w.bands[2]),
-                ]
+            // Average (not peak) band levels: spiky hats would otherwise win every column.
+            let sum = slice.iter().fold([0.0f32; 3], |a, w| {
+                [a[0] + w.bands[0], a[1] + w.bands[1], a[2] + w.bands[2]]
             });
+            let bands = sum.map(|v| v / slice.len() as f32);
             let frac = (c as f64 + 0.5) / cols as f64;
             let dim = if position_frac.is_some_and(|p| frac < p) {
                 0.5
@@ -489,11 +540,39 @@ mod tests {
 
     #[test]
     fn band_colour_follows_the_dominant_band() {
-        assert_eq!(band_colour([200.0, 0.0, 0.0]), theme::BAND_LOW);
-        assert_eq!(band_colour([0.0, 0.0, 200.0]), theme::BAND_HIGH);
+        assert_eq!(band_colour([1.5, 0.0, 0.0]), theme::BAND_LOW);
+        assert_eq!(band_colour([0.0, 0.0, 1.5]), theme::BAND_HIGH);
         // An even mix lands between the band colours.
-        let c = band_colour([100.0, 100.0, 100.0]);
+        let c = band_colour([1.0, 1.0, 1.0]);
         assert_ne!(c, theme::BAND_LOW);
         assert_ne!(c, theme::BAND_HIGH);
+        // A band half again above the others dominates clearly.
+        let c = band_colour([1.5, 1.0, 1.0]);
+        let dist = |a: Color32, b: Color32| {
+            (i32::from(a.r()) - i32::from(b.r())).abs()
+                + (i32::from(a.g()) - i32::from(b.g())).abs()
+                + (i32::from(a.b()) - i32::from(b.b())).abs()
+        };
+        assert!(dist(c, theme::BAND_LOW) < dist(c, theme::BAND_MID));
+        assert!(dist(c, theme::BAND_LOW) < dist(c, theme::BAND_HIGH));
+    }
+
+    #[test]
+    fn norms_make_a_band_that_is_always_loud_look_typical() {
+        // Lows always at 200, mids at 40, highs at 40: raw levels would colour it all low.
+        let mut bins = vec![[200u8, 40, 40]; 100];
+        // One hat hit: highs jump to 120 (3x their norm) while lows stay at their norm.
+        bins[50] = [200, 40, 120];
+        let n = band_norms(&bins);
+        assert_eq!(n, [200.0, 40.0, 40.0]);
+        let typical = relative([200.0, 40.0, 40.0], n);
+        assert_eq!(typical, [1.0, 1.0, 1.0]);
+        let hat = band_colour(relative([200.0, 40.0, 120.0], n));
+        let dist = |a: Color32, b: Color32| {
+            (i32::from(a.r()) - i32::from(b.r())).abs()
+                + (i32::from(a.g()) - i32::from(b.g())).abs()
+                + (i32::from(a.b()) - i32::from(b.b())).abs()
+        };
+        assert!(dist(hat, theme::BAND_HIGH) < 30, "{hat:?}");
     }
 }

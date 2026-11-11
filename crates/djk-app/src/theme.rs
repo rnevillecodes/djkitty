@@ -17,10 +17,11 @@ pub const DECK_A: Color32 = Color32::from_rgb(0x3f, 0xb6, 0xff);
 pub const DECK_B: Color32 = Color32::from_rgb(0xff, 0x8a, 0x3d);
 
 /// Waveform band colours: low (kick/bass), mid, high (hats).
-/// Soft pastels at mid brightness, so the waveforms sit calmly beside the controls.
-pub const BAND_LOW: Color32 = Color32::from_rgb(0x7f, 0xa6, 0xd9); // pastel blue
-pub const BAND_MID: Color32 = Color32::from_rgb(0xe0, 0xb0, 0x8a); // peach
-pub const BAND_HIGH: Color32 = Color32::from_rgb(0xc9, 0xc3, 0xe6); // lavender
+/// Soft but clearly separated hues (blue, amber, mint), so lows, mids and highs are easy
+/// to tell apart in the waveform without being glaring.
+pub const BAND_LOW: Color32 = Color32::from_rgb(0x5c, 0x9c, 0xf2); // blue
+pub const BAND_MID: Color32 = Color32::from_rgb(0xf0, 0xa8, 0x5c); // amber
+pub const BAND_HIGH: Color32 = Color32::from_rgb(0x96, 0xe6, 0xc2); // mint
 
 /// Musical key readouts.
 pub const KEY: Color32 = Color32::from_rgb(0xb7, 0x8c, 0xff);

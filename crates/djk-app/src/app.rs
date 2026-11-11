@@ -27,6 +27,8 @@ pub struct DeckUi {
     pub waveform: Option<Arc<Waveform>>,
     /// Min/max summary of the audio, used for the waveform shape.
     pub peaks: Option<Arc<Peaks>>,
+    /// Each band's typical level in this track, for tinting (see `waveview::band_norms`).
+    pub band_norm: [f32; 3],
     pub overview: Vec<WaveCol>,
     pub loading: bool,
     pub message: Option<(String, Instant)>,
@@ -512,6 +514,7 @@ impl DjApp {
                     }
                     let ui = &mut self.decks[deck.index()];
                     ui.overview = crate::waveview::overview_cols(&peaks, &waveform, OVERVIEW_BINS);
+                    ui.band_norm = crate::waveview::band_norms(&waveform.bins);
                     ui.waveform = Some(Arc::new(waveform));
                     ui.peaks = Some(Arc::new(peaks));
                     if !self.audio.load(LoadRequest {
