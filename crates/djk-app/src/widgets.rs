@@ -609,12 +609,15 @@ mod tests {
 /// Height of single-line text fields, so they line up with buttons.
 pub const FIELD_HEIGHT: f32 = 28.0;
 
+/// Space between a text field's edge and its text.
+pub const FIELD_TEXT_INSET: f32 = 8.0;
+
 /// A single-line text field with its text vertically centred.
 pub fn text_field(text: &mut String) -> egui::TextEdit<'_> {
     egui::TextEdit::singleline(text)
         .align(Align2::LEFT_CENTER)
         .min_size(vec2(0.0, FIELD_HEIGHT))
-        .margin(vec2(8.0, 0.0))
+        .margin(vec2(FIELD_TEXT_INSET, 0.0))
 }
 
 /// SVG icons, drawn white so they can be tinted.

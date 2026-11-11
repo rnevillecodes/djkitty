@@ -1020,7 +1020,15 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
 fn sidebar(app: &mut DjApp, ui: &mut Ui) {
     ui.add_space(10.0);
     ui.horizontal(|ui| {
-        section_heading(ui, "SETS");
+        // Line the heading up with the text in the search field below.
+        ui.add_space(widgets::FIELD_TEXT_INSET);
+        ui.label(
+            RichText::new("SETS")
+                .size(13.0)
+                .strong()
+                .extra_letter_spacing(1.4)
+                .color(theme::TEXT_DIM),
+        );
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
             let plus = ui
