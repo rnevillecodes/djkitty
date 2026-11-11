@@ -69,6 +69,9 @@ pub struct DjApp {
     pub start_time: Instant,
     pub focus_search: bool,
     pub show_shortcuts: bool,
+    /// Seconds of audio visible in the scrolling waveform lanes (shared, so both decks
+    /// use the same time scale).
+    pub wave_window_secs: f64,
 }
 
 impl DjApp {
@@ -124,6 +127,7 @@ impl DjApp {
             start_time: Instant::now(),
             focus_search: false,
             show_shortcuts: false,
+            wave_window_secs: crate::waveview::DEFAULT_WINDOW_SECS,
         };
         app.refresh_devices();
         app.reload_sets();
@@ -398,7 +402,7 @@ impl DjApp {
             deck,
             path,
             token: id.0 as u64,
-            waveform_cache: cache.is_file().then_some(cache),
+            waveform_cache: cache,
         });
     }
 

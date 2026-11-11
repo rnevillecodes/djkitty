@@ -7,9 +7,9 @@ use std::path::Path;
 use crate::dsp::Biquad;
 
 /// Detail resolution: bins per second of audio.
-pub const BINS_PER_SEC: u32 = 150;
+pub const BINS_PER_SEC: u32 = 600;
 /// Approximate number of bins in a track overview.
-pub const OVERVIEW_BINS: usize = 1000;
+pub const OVERVIEW_BINS: usize = 4000;
 /// Low/mid crossover in Hz.
 pub const LOW_MID_HZ: f32 = 250.0;
 /// Mid/high crossover in Hz.
@@ -18,7 +18,7 @@ pub const MID_HIGH_HZ: f32 = 4_000.0;
 const MAGIC: &[u8; 4] = b"DJKW";
 const VERSION: u8 = 1;
 
-/// Per-band peak levels (0–255) for one bin: `[low, mid, high]`.
+/// Per-band peak levels (0â€“255) for one bin: `[low, mid, high]`.
 pub type Bin = [u8; 3];
 
 #[derive(Debug, Clone, PartialEq)]
@@ -180,7 +180,7 @@ mod tests {
     fn bin_count_matches_duration() {
         for (rate, secs) in [(44_100, 3.0f32), (48_000, 2.5), (44_100, 0.01)] {
             let w = Waveform::from_audio(&tone(440.0, rate, secs), rate);
-            let expected = (f64::from(secs) * 150.0).ceil() as usize;
+            let expected = (f64::from(secs) * f64::from(BINS_PER_SEC)).ceil() as usize;
             assert!(
                 w.bins.len().abs_diff(expected) <= 1,
                 "{rate} {secs}: {} vs {expected}",
@@ -192,12 +192,12 @@ mod tests {
     #[test]
     fn overview_reduces_and_keeps_peaks() {
         let mut w = Waveform {
-            bins_per_sec: 150,
-            bins: vec![[1, 2, 3]; 45_000],
+            bins_per_sec: BINS_PER_SEC,
+            bins: vec![[1, 2, 3]; 180_000],
         };
         w.bins[123] = [200, 0, 0];
         let o = w.overview(OVERVIEW_BINS);
-        assert!(o.len() <= OVERVIEW_BINS && o.len() > 900);
+        assert!(o.len() <= OVERVIEW_BINS && o.len() > OVERVIEW_BINS * 9 / 10);
         assert!(o.iter().any(|b| b[0] == 200));
     }
 

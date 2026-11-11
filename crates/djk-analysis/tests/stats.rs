@@ -39,8 +39,15 @@ fn stats_for_each_format() {
                 assert!((32..=320).contains(&b), "{name}: {b} kbps");
             }
         }
-        // Waveform covers the duration at 150 bins/s.
-        let expected = (s.duration_secs * 150.0).ceil() as usize;
-        assert!(a.waveform.bins.len().abs_diff(expected) <= 1, "{name}");
+        // Waveform covers the duration at the detail resolution (within 10 ms, since
+        // lossy formats report a duration that ignores encoder padding).
+        let bps = f64::from(djk_analysis::waveform::BINS_PER_SEC);
+        let expected = (s.duration_secs * bps).ceil() as usize;
+        let slack = (bps / 100.0).ceil() as usize;
+        assert!(
+            a.waveform.bins.len().abs_diff(expected) <= slack,
+            "{name}: {} bins vs {expected}",
+            a.waveform.bins.len()
+        );
     }
 }

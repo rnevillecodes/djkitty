@@ -3,6 +3,7 @@
 use std::path::PathBuf;
 use std::sync::mpsc::{Receiver, Sender, channel};
 
+use djk_analysis::waveform::BINS_PER_SEC;
 use djk_analysis::{Decoded, Waveform};
 use djk_core::DeckId;
 
@@ -10,8 +11,9 @@ pub struct LoadJob {
     pub deck: DeckId,
     pub path: PathBuf,
     pub token: u64,
-    /// Waveform cache file to read, if the track was analysed.
-    pub waveform_cache: Option<PathBuf>,
+    /// Waveform cache file: read when it exists at the current resolution, written
+    /// otherwise.
+    pub waveform_cache: PathBuf,
 }
 
 pub struct Loaded {
@@ -35,16 +37,19 @@ impl Loader {
                 for job in job_rx {
                     let result = djk_analysis::decode_file(&job.path)
                         .map(|decoded| {
-                            let waveform = job
-                                .waveform_cache
-                                .as_deref()
-                                .and_then(|p| Waveform::load(p).ok())
-                                .unwrap_or_else(|| {
-                                    Waveform::from_audio(
-                                        &decoded.buffer.samples,
-                                        decoded.buffer.sample_rate,
-                                    )
-                                });
+                            let cached = Waveform::load(&job.waveform_cache)
+                                .ok()
+                                .filter(|w| w.bins_per_sec == BINS_PER_SEC);
+                            let waveform = cached.unwrap_or_else(|| {
+                                let w = Waveform::from_audio(
+                                    &decoded.buffer.samples,
+                                    decoded.buffer.sample_rate,
+                                );
+                                // Missing or older, lower-resolution caches are
+                                // (re)written here.
+                                let _ = w.save(&job.waveform_cache);
+                                w
+                            });
                             (decoded, waveform)
                         })
                         .map_err(|e| e.to_string());

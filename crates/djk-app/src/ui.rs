@@ -1,4 +1,5 @@
-//! Window layout and widgets: two decks around a mixer strip on top, the browser below.
+//! Window layout and widgets: stacked full-width waveform lanes on top, then two decks
+//! around a mixer strip, then the browser.
 
 use std::time::{Duration, Instant};
 
@@ -13,9 +14,14 @@ use crate::theme;
 use crate::util::fmt_time;
 use crate::waveview;
 
-const DECKS_HEIGHT: f32 = 330.0;
+/// Height of the row holding the two deck panels and the mixer.
+const DECKS_ROW_HEIGHT: f32 = 222.0;
 const MIXER_WIDTH: f32 = 230.0;
 const MESSAGE_SECS: u64 = 5;
+/// Gap between the stacked waveform lanes.
+const LANE_GAP: f32 = 4.0;
+/// Space kept for the library below the decks when sizing the lanes.
+const MIN_BROWSER_HEIGHT: f32 = 280.0;
 
 pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     egui::Panel::bottom("status")
@@ -25,11 +31,18 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
                 .inner_margin(egui::Margin::symmetric(10, 4)),
         )
         .show(ui, |ui| status_bar(app, ui));
+    // Lanes grow with the window, but never squeeze the library below its minimum.
+    let lane_h = ((ui.available_height() - DECKS_ROW_HEIGHT - MIN_BROWSER_HEIGHT - 40.0) / 2.0)
+        .clamp(80.0, 170.0);
     egui::Panel::top("decks")
         .resizable(false)
-        .exact_size(DECKS_HEIGHT)
+        .exact_size(2.0 * lane_h + LANE_GAP + 8.0 + DECKS_ROW_HEIGHT)
         .frame(egui::Frame::new().fill(theme::BG).inner_margin(8))
-        .show(ui, |ui| decks_row(app, ui));
+        .show(ui, |ui| {
+            waveform_lanes(app, ui, lane_h);
+            ui.add_space(8.0);
+            decks_row(app, ui);
+        });
     egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(240.0)
@@ -42,6 +55,38 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
 }
 
 // ---------------------------------------------------------------- decks + mixer
+
+/// Both decks' scrolling waveforms, full width and stacked (A above B) on a shared time
+/// scale, so beats can be lined up by eye.
+fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
+    let state = app.audio.state;
+    let now = Instant::now();
+    let width = ui.available_width().max(1.0);
+    ui.spacing_mut().item_spacing.y = LANE_GAP;
+    for deck in DeckId::ALL {
+        let s = *state.deck(deck);
+        let pos = display_position_secs(&state, &s, now);
+        let wf = app.decks[deck.index()]
+            .waveform
+            .clone()
+            .filter(|_| s.loaded);
+        let cue_secs = s.loaded.then(|| s.cue / f64::from(s.track_rate.max(1)));
+        waveview::scrolling(
+            ui,
+            Vec2::new(width, lane_h),
+            wf.as_deref(),
+            pos,
+            cue_secs,
+            theme::deck_colour(deck),
+            deck.label(),
+            &mut app.wave_window_secs,
+        )
+        .on_hover_text(format!(
+            "Showing {:.1} s · scroll to zoom",
+            app.wave_window_secs
+        ));
+    }
+}
 
 fn decks_row(app: &mut DjApp, ui: &mut Ui) {
     let full = ui.available_size();
@@ -175,27 +220,13 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
             ui.colored_label(theme::WARN, msg);
         }
 
-        // Scrolling waveform.
+        // Overview with click-to-seek while paused. (The scrolling waveform lives in the
+        // stacked lanes above the decks.)
         let pos = display_position_secs(&state, &s, now);
-        let wf = app.decks[deck.index()]
-            .waveform
-            .clone()
-            .filter(|_| s.loaded);
-        let cue_secs = s.loaded.then(|| s.cue / f64::from(s.track_rate.max(1)));
-        waveview::scrolling(
-            ui,
-            Vec2::new(width, 96.0),
-            wf.as_deref(),
-            pos,
-            cue_secs,
-            accent,
-        );
-
-        // Overview with click-to-seek while paused.
         let dur = s.duration_secs().max(1e-6);
         let ov = waveview::overview(
             ui,
-            Vec2::new(width, 34.0),
+            Vec2::new(width, 44.0),
             if s.loaded {
                 &app.decks[deck.index()].overview
             } else {
@@ -321,16 +352,6 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let state = app.audio.state;
     let m = state.mixer;
     card(ui, theme::TEXT_DIM, |ui| {
-        ui.vertical_centered(|ui| {
-            ui.label(
-                RichText::new("MIXER")
-                    .small()
-                    .strong()
-                    .color(theme::TEXT_DIM),
-            );
-        });
-        ui.add_space(4.0);
-
         // Headphone cue toggles.
         ui.columns(2, |cols| {
             for (i, deck) in DeckId::ALL.into_iter().enumerate() {
@@ -354,30 +375,37 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             }
         });
 
-        // Channel faders.
+        // Vertical faders side by side: channel A, channel B, master, headphones.
         ui.add_space(4.0);
-        ui.columns(2, |cols| {
+        let defaults = MixerState::default();
+        let phones_ok = state.headphones_available();
+        ui.columns(4, |cols| {
             for (i, deck) in DeckId::ALL.into_iter().enumerate() {
-                cols[i].vertical_centered(|ui| {
-                    let mut v = m.channel_fader[deck.index()];
-                    ui.spacing_mut().slider_width = 80.0;
-                    let resp = ui.add(
-                        egui::Slider::new(&mut v, 0.0..=1.0)
-                            .vertical()
-                            .show_value(false),
-                    );
-                    let default = MixerState::default().channel_fader[deck.index()];
-                    if let Some(v) = slider_value(ui, &resp, v, default) {
-                        app.audio.send(Command::SetChannelFader { deck, value: v });
-                        app.ui_fader(FaderTarget::Channel(deck), v);
-                    }
-                    resp.on_hover_text(RESET_HINT);
-                    ui.label(
-                        RichText::new(deck.label())
-                            .color(theme::deck_colour(deck))
-                            .strong(),
-                    );
-                });
+                let v = m.channel_fader[deck.index()];
+                let label = RichText::new(deck.label())
+                    .color(theme::deck_colour(deck))
+                    .strong();
+                let default = defaults.channel_fader[deck.index()];
+                if let Some(v) = vertical_fader(&mut cols[i], v, default, label, true) {
+                    app.audio.send(Command::SetChannelFader { deck, value: v });
+                    app.ui_fader(FaderTarget::Channel(deck), v);
+                }
+            }
+            let label = RichText::new("Master").small().color(theme::TEXT_DIM);
+            if let Some(v) =
+                vertical_fader(&mut cols[2], m.master_level, defaults.master_level, label, true)
+            {
+                app.audio.send(Command::SetMasterLevel(v));
+            }
+            let label = RichText::new("Phones").small().color(theme::TEXT_DIM);
+            if let Some(v) = vertical_fader(
+                &mut cols[3],
+                m.headphone_level,
+                defaults.headphone_level,
+                label,
+                phones_ok,
+            ) {
+                app.audio.send(Command::SetHeadphoneLevel(v));
             }
         });
 
@@ -399,42 +427,34 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             );
         });
 
-        // Levels.
-        ui.add_space(4.0);
-        egui::Grid::new("levels")
-            .num_columns(2)
-            .spacing([6.0, 4.0])
-            .show(ui, |ui| {
-                ui.spacing_mut().slider_width = 120.0;
-                ui.label("Master");
-                let defaults = MixerState::default();
-                let mut v = m.master_level;
-                let resp = ui.add(egui::Slider::new(&mut v, 0.0..=1.0).show_value(false));
-                if let Some(v) = slider_value(ui, &resp, v, defaults.master_level) {
-                    app.audio.send(Command::SetMasterLevel(v));
-                }
-                resp.on_hover_text(RESET_HINT);
-                ui.end_row();
-                ui.label("Phones");
-                let mut v = m.headphone_level;
-                let resp = ui.add_enabled(
-                    state.headphones_available(),
-                    egui::Slider::new(&mut v, 0.0..=1.0).show_value(false),
-                );
-                if let Some(v) = slider_value(ui, &resp, v, defaults.headphone_level) {
-                    app.audio.send(Command::SetHeadphoneLevel(v));
-                }
-                resp.on_hover_text(RESET_HINT);
-                ui.end_row();
-            });
-        if !state.headphones_available() {
-            ui.label(
-                RichText::new("Headphone cue unavailable on this device")
-                    .small()
-                    .color(theme::WARN),
-            );
-        }
     });
+}
+
+/// One vertical 0–1 fader with a label underneath, centred in its column. Returns the new
+/// value when the user moved or reset it.
+fn vertical_fader(
+    ui: &mut Ui,
+    value: f32,
+    default: f32,
+    label: RichText,
+    enabled: bool,
+) -> Option<f32> {
+    ui.vertical_centered(|ui| {
+        let mut v = value;
+        ui.spacing_mut().slider_width = 84.0;
+        let resp = ui.add_enabled(
+            enabled,
+            egui::Slider::new(&mut v, 0.0..=1.0)
+                .vertical()
+                .show_value(false),
+        );
+        let out = slider_value(ui, &resp, v, default);
+        resp.on_hover_text(RESET_HINT)
+            .on_disabled_hover_text("Needs a 4-channel device (like the DDJ-FLX2)");
+        ui.label(label);
+        out
+    })
+    .inner
 }
 
 // ---------------------------------------------------------------- sidebar
@@ -757,14 +777,23 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
     let rows = &app.rows;
     let selected = app.selected;
 
+    // Resizable tables remember their column widths, which would stop the remainder
+    // columns from stretching when the panel grows. Keying the stored state on the width
+    // re-fits the columns whenever it changes (manual resizes last until then).
+    let width_key = ui.available_width().round() as i32;
     let mut table = TableBuilder::new(ui)
+        .id_salt(("track_table", width_key, in_set))
         .striped(true)
         .resizable(true)
+        // Always use the full width and height, even with few or short rows.
+        .auto_shrink(false)
         .sense(Sense::click())
         .cell_layout(Layout::left_to_right(Align::Center))
         .column(Column::exact(if in_set { 30.0 } else { 0.0 }))
+        // Title and artist share whatever width is left, so the table always fills the
+        // panel as the window or sidebar changes size.
         .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::initial(170.0).at_least(80.0).clip(true))
+        .column(Column::remainder().at_least(80.0).clip(true))
         .column(Column::exact(60.0))
         .column(Column::exact(50.0))
         .column(Column::exact(56.0))
