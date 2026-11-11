@@ -19,7 +19,11 @@ use crate::widgets;
 
 /// Height of the row holding the two deck panels and the mixer.
 const DECKS_ROW_HEIGHT: f32 = 222.0;
-const MIXER_WIDTH: f32 = 280.0;
+const MIXER_WIDTH: f32 = 222.0;
+/// Panel with the master and headphone level knobs, left of the mixer.
+const LEVELS_WIDTH: f32 = 64.0;
+/// Panel with the master meter, right of the mixer.
+const MASTER_WIDTH: f32 = 58.0;
 const MESSAGE_SECS: u64 = 5;
 /// Gap between the stacked waveform lanes.
 const LANE_GAP: f32 = 4.0;
@@ -127,16 +131,21 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
 fn decks_row(app: &mut DjApp, ui: &mut Ui) {
     let full = ui.available_size();
     use egui_extras::{Size, StripBuilder};
-    if full.x < MIXER_WIDTH + 400.0 {
+    if full.x < LEVELS_WIDTH + MIXER_WIDTH + MASTER_WIDTH + 400.0 {
         return; // window not laid out yet
     }
+    // Deck A | levels | mixer | master meter | deck B
     StripBuilder::new(ui)
         .size(Size::remainder().at_least(200.0))
+        .size(Size::exact(LEVELS_WIDTH))
         .size(Size::exact(MIXER_WIDTH))
+        .size(Size::exact(MASTER_WIDTH))
         .size(Size::remainder().at_least(200.0))
         .horizontal(|mut strip| {
             strip.cell(|ui| deck_panel(app, ui, DeckId::A));
+            strip.cell(|ui| levels_panel(app, ui));
             strip.cell(|ui| mixer_strip(app, ui));
+            strip.cell(|ui| master_panel(app, ui));
             strip.cell(|ui| deck_panel(app, ui, DeckId::B));
         });
 }
@@ -590,53 +599,163 @@ fn fmt_tenths(secs: f64) -> String {
 
 const RESET_HINT: &str = "Ctrl+click or double-click to reset";
 
-fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
+/// Vertical layout shared by the mixer and the panels beside it, so their faders, meters
+/// and knobs line up: everything fits the card's height (the same as the decks), with
+/// the crossfader row at the bottom of the mixer and labels under the faders and meters.
+struct StripLayout {
+    /// Top of the faders/meters, relative to the card's content.
+    top: f32,
+    fader_h: f32,
+    /// Top of the crossfader row.
+    xf_top: f32,
+    xf_h: f32,
+}
+
+impl StripLayout {
+    fn new(content_height: f32) -> Self {
+        let top = 4.0;
+        let xf_h = 28.0;
+        let xf_top = content_height - xf_h;
+        Self {
+            top,
+            fader_h: (xf_top - top - 22.0).max(60.0),
+            xf_top,
+            xf_h,
+        }
+    }
+}
+
+/// Places widgets and labels on a fixed grid inside a card, `content_w` wide and centred.
+struct Grid {
+    x0: f32,
+    y0: f32,
+}
+
+impl Grid {
+    fn centred(full: Rect, content_w: f32) -> Self {
+        Self {
+            x0: full.left() + ((full.width() - content_w) / 2.0).max(0.0),
+            y0: full.top(),
+        }
+    }
+
+    fn at(&self, x: f32, y: f32, w: f32, h: f32) -> Rect {
+        Rect::from_min_size(egui::pos2(self.x0 + x, self.y0 + y), Vec2::new(w, h))
+    }
+
+    fn place(&self, ui: &mut Ui, r: Rect, add: impl FnOnce(&mut Ui)) {
+        ui.scope_builder(egui::UiBuilder::new().max_rect(r), add);
+    }
+
+    fn label(&self, ui: &Ui, centre_x: f32, y: f32, text: &str, colour: Color32) {
+        ui.painter().text(
+            egui::pos2(self.x0 + centre_x, self.y0 + y),
+            egui::Align2::CENTER_TOP,
+            text,
+            egui::FontId::proportional(9.0),
+            colour,
+        );
+    }
+}
+
+/// Master and headphone level knobs, in their own panel left of the mixer.
+fn levels_panel(app: &mut DjApp, ui: &mut Ui) {
     let state = app.audio.state;
     let m = state.mixer;
     let defaults = MixerState::default();
     let phones_ok = state.headphones_available();
+    card(ui, theme::TEXT_DIM, |ui| {
+        let full = ui.available_rect_before_wrap();
+        let lay = StripLayout::new(full.height());
+        let d = 38.0;
+        let g = Grid::centred(full, d);
+        let knobs = [
+            (
+                "LEVEL",
+                lay.top + 4.0,
+                m.master_level,
+                defaults.master_level,
+                true,
+                true,
+            ),
+            (
+                "PHONES",
+                lay.top + 74.0,
+                m.headphone_level,
+                defaults.headphone_level,
+                phones_ok,
+                false,
+            ),
+        ];
+        for (name, y, value, default, enabled, is_master) in knobs {
+            g.place(ui, g.at(0.0, y, d, d), |ui| {
+                let (resp, new) = widgets::knob(ui, d, value, default, theme::TEXT, enabled, false);
+                if let Some(v) = new {
+                    app.audio.send(if is_master {
+                        Command::SetMasterLevel(v)
+                    } else {
+                        Command::SetHeadphoneLevel(v)
+                    });
+                }
+                let what = if is_master {
+                    "Master level"
+                } else {
+                    "Headphone level"
+                };
+                resp.on_hover_text(format!("{what} · drag up/down · {RESET_HINT}"))
+                    .on_disabled_hover_text("Headphones need a 4-channel device");
+            });
+            g.label(ui, d / 2.0, y + d + 2.0, name, theme::TEXT_DIM);
+        }
+    });
+}
+
+/// The master output meter (left and right), in its own panel right of the mixer.
+fn master_panel(app: &mut DjApp, ui: &mut Ui) {
+    let meters = app.meters;
+    card(ui, theme::TEXT_DIM, |ui| {
+        let full = ui.available_rect_before_wrap();
+        let lay = StripLayout::new(full.height());
+        let w = 16.0;
+        let g = Grid::centred(full, w);
+        let h = lay.fader_h - 4.0;
+        widgets::meter(ui.painter(), g.at(0.0, lay.top + 2.0, 6.0, h), meters[2]);
+        widgets::meter(ui.painter(), g.at(10.0, lay.top + 2.0, 6.0, h), meters[3]);
+        g.label(
+            ui,
+            w / 2.0,
+            lay.top + lay.fader_h + 3.0,
+            "MASTER",
+            theme::TEXT_DIM,
+        );
+    });
+}
+
+/// The mixer: per-channel EQ, meters and faders, with the crossfader underneath spanning
+/// the same width.
+fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
+    let state = app.audio.state;
+    let m = state.mixer;
+    let defaults = MixerState::default();
     let meters = app.meters;
     let rect = card(ui, theme::TEXT_DIM, |ui| {
         let full = ui.available_rect_before_wrap();
-        // Lay the strip out on a fixed grid, centred in the card.
-        // Columns, left to right: LEVEL/PHONES knobs, deck A EQ, A meter, A fader,
-        // B fader, B meter, deck B EQ, master meters.
-        let content_w = 254.0;
-        let x0 = full.left() + ((full.width() - content_w) / 2.0).max(0.0);
-        let y0 = full.top();
-        let at = |x: f32, y: f32, w: f32, h: f32| {
-            Rect::from_min_size(egui::pos2(x0 + x, y0 + y), Vec2::new(w, h))
-        };
-        let place = |ui: &mut Ui, r: Rect, add: &mut dyn FnMut(&mut Ui)| {
-            ui.scope_builder(egui::UiBuilder::new().max_rect(r), |ui| add(ui));
-        };
-        let label = |ui: &Ui, centre_x: f32, y: f32, text: &str, colour: Color32| {
-            ui.painter().text(
-                egui::pos2(x0 + centre_x, y0 + y),
-                egui::Align2::CENTER_TOP,
-                text,
-                egui::FontId::proportional(9.0),
-                colour,
-            );
-        };
+        // Columns, left to right: deck A EQ, A meter, A fader, B fader, B meter, deck B EQ.
+        let content_w = 170.0;
+        let g = Grid::centred(full, content_w);
+        let lay = StripLayout::new(full.height());
+        let (top, fader_h) = (lay.top, lay.fader_h);
 
         // Channel faders with their meters (headphone cue is on the 1/2 keys and the
         // controller).
-        // Everything fits inside the card's height (the same as the decks): the
-        // crossfader sits at the bottom and the faders take the height above it, leaving
-        // room for their labels.
-        let top = 4.0;
-        let xf_h = 28.0;
-        let xf_top = full.height() - xf_h;
-        let fader_h = (xf_top - top - 22.0).max(60.0);
-        for (deck, fx, mx) in [(DeckId::A, 98.0, 88.0), (DeckId::B, 142.0, 180.0)] {
+        for (deck, fx, mx) in [(DeckId::A, 48.0, 38.0), (DeckId::B, 92.0, 130.0)] {
             let i = deck.index();
             widgets::meter(
                 ui.painter(),
-                at(mx, top + 2.0, 6.0, fader_h - 4.0),
+                g.at(mx, top + 2.0, 6.0, fader_h - 4.0),
                 meters[i],
             );
-            place(ui, at(fx, top, 34.0, fader_h), &mut |ui| {
+            g.place(ui, g.at(fx, top, 34.0, fader_h), |ui| {
                 let (resp, new) = widgets::fader(
                     ui,
                     Vec2::new(34.0, fader_h),
@@ -657,7 +776,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                 }
                 resp.on_hover_text(format!("Channel {} · {RESET_HINT}", deck.label()));
             });
-            label(
+            g.label(
                 ui,
                 fx + 17.0,
                 top + fader_h + 3.0,
@@ -670,7 +789,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
         // each channel, each in its waveform band colour; red when the band is killed.
         let eq_d = 30.0;
         let eq_step = ((fader_h + 14.0) / 3.0).max(eq_d + 10.0);
-        for (deck, cx) in [(DeckId::A, 64.0), (DeckId::B, 210.0)] {
+        for (deck, cx) in [(DeckId::A, 15.0), (DeckId::B, 155.0)] {
             for (k, band) in EqBand::ALL.into_iter().enumerate() {
                 let value = m.eq[deck.index()][band.index()];
                 let colour = if value <= 0.001 {
@@ -683,7 +802,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                     }
                 };
                 let y = top + k as f32 * eq_step;
-                place(ui, at(cx - eq_d / 2.0, y, eq_d, eq_d), &mut |ui| {
+                g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
                     let (resp, new) =
                         widgets::knob(ui, eq_d, value, EQ_NEUTRAL, colour, true, true);
                     if let Some(v) = new {
@@ -706,85 +825,25 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                         band.label()
                     ));
                 });
-                label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
+                g.label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
             }
         }
 
-        // Master meter (left/right).
-        widgets::meter(
-            ui.painter(),
-            at(236.0, top + 2.0, 5.0, fader_h - 4.0),
-            meters[2],
-        );
-        widgets::meter(
-            ui.painter(),
-            at(245.0, top + 2.0, 5.0, fader_h - 4.0),
-            meters[3],
-        );
-        label(ui, 243.0, top + fader_h + 3.0, "MASTER", theme::TEXT_DIM);
-
-        // Master and headphone level knobs.
-        let knobs = [
-            (
-                "LEVEL",
-                top + 4.0,
-                m.master_level,
-                defaults.master_level,
-                true,
-                true,
-            ),
-            (
-                "PHONES",
-                top + 74.0,
-                m.headphone_level,
-                defaults.headphone_level,
-                phones_ok,
-                false,
-            ),
-        ];
-        for (name, y, value, default, enabled, is_master) in knobs {
-            place(ui, at(1.0, y, 38.0, 38.0), &mut |ui| {
-                let (resp, new) =
-                    widgets::knob(ui, 38.0, value, default, theme::TEXT, enabled, false);
-                if let Some(v) = new {
-                    app.audio.send(if is_master {
-                        Command::SetMasterLevel(v)
-                    } else {
-                        Command::SetHeadphoneLevel(v)
-                    });
-                }
-                let what = if is_master {
-                    "Master level"
-                } else {
-                    "Headphone level"
-                };
-                resp.on_hover_text(format!("{what} · drag up/down · {RESET_HINT}"))
-                    .on_disabled_hover_text("Headphones need a 4-channel device");
-            });
-            label(ui, 20.0, y + 40.0, name, theme::TEXT_DIM);
+        // Crossfader: exactly as wide as the columns above, with A and B either side.
+        let xf = g.at(0.0, lay.xf_top, content_w, lay.xf_h);
+        for (x, text, colour) in [
+            (xf.left() - 9.0, "A", theme::DECK_A),
+            (xf.right() + 9.0, "B", theme::DECK_B),
+        ] {
+            ui.painter().text(
+                egui::pos2(x, xf.center().y),
+                egui::Align2::CENTER_CENTER,
+                text,
+                egui::FontId::proportional(12.0),
+                colour,
+            );
         }
-
-        // Crossfader.
-        let xf_w = full.width() - 36.0;
-        let xf = Rect::from_min_size(
-            egui::pos2(full.center().x - xf_w / 2.0, y0 + xf_top),
-            Vec2::new(xf_w, xf_h),
-        );
-        ui.painter().text(
-            egui::pos2(xf.left() - 10.0, xf.center().y),
-            egui::Align2::CENTER_CENTER,
-            "A",
-            egui::FontId::proportional(12.0),
-            theme::DECK_A,
-        );
-        ui.painter().text(
-            egui::pos2(xf.right() + 10.0, xf.center().y),
-            egui::Align2::CENTER_CENTER,
-            "B",
-            egui::FontId::proportional(12.0),
-            theme::DECK_B,
-        );
-        place(ui, xf, &mut |ui| {
+        g.place(ui, xf, |ui| {
             let (resp, new) = widgets::fader(
                 ui,
                 xf.size(),
