@@ -165,7 +165,7 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
-/// A panel with a soft top-lit surface and a thin accent strip along the top edge.
+/// A flat panel with a thin accent strip along the top edge.
 fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
     let background = ui.painter().add(egui::Shape::Noop);
     let rect = egui::Frame::new()
@@ -184,40 +184,19 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
         .response
         .rect;
 
-    // Paint the background behind the content, now that the size is known.
-    let mut shapes = vec![egui::Shape::rect_filled(rect, 10, theme::PANEL)];
-    let sheen = Rect::from_min_size(
-        rect.min + Vec2::new(6.0, 1.0),
-        Vec2::new(rect.width() - 12.0, 46.0),
-    );
+    // Paint the background behind the content, now that the size is known: a flat
+    // panel with the accent strip along the top edge.
     let strip = Rect::from_min_size(
         rect.min + Vec2::new(14.0, 0.0),
         Vec2::new(rect.width() - 28.0, 2.0),
     );
-    let mut mesh = egui::Mesh::default();
-    for (r, top, bottom) in [
-        (sheen, Color32::from_white_alpha(7), Color32::TRANSPARENT),
-        (
-            Rect::from_min_size(strip.min, Vec2::new(strip.width(), 18.0)),
-            accent.gamma_multiply(0.12),
-            Color32::TRANSPARENT,
-        ),
-    ] {
-        let i = mesh.vertices.len() as u32;
-        mesh.colored_vertex(r.left_top(), top);
-        mesh.colored_vertex(r.right_top(), top);
-        mesh.colored_vertex(r.right_bottom(), bottom);
-        mesh.colored_vertex(r.left_bottom(), bottom);
-        mesh.add_triangle(i, i + 1, i + 2);
-        mesh.add_triangle(i, i + 2, i + 3);
-    }
-    shapes.push(egui::Shape::mesh(mesh));
-    shapes.push(egui::Shape::rect_filled(
-        strip,
-        1,
-        accent.gamma_multiply(0.85),
-    ));
-    ui.painter().set(background, egui::Shape::Vec(shapes));
+    ui.painter().set(
+        background,
+        egui::Shape::Vec(vec![
+            egui::Shape::rect_filled(rect, 10, theme::PANEL),
+            egui::Shape::rect_filled(strip, 1, accent.gamma_multiply(0.85)),
+        ]),
+    );
     rect
 }
 
