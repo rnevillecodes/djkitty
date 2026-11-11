@@ -42,6 +42,11 @@ const MIGRATIONS: &[&str] = &[
     );
     CREATE INDEX set_tracks_order ON set_tracks(set_id, position);
     "#,
+    // v2: which version of the analysis produced each result, so improved analysis
+    // (e.g. better BPM detection) re-runs on existing tracks.
+    r#"
+    ALTER TABLE analysis ADD COLUMN version INTEGER NOT NULL DEFAULT 1;
+    "#,
 ];
 
 /// Apply any migrations newer than the database's `user_version`.

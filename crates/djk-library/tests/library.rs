@@ -374,6 +374,38 @@ fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
 }
 
 #[test]
+fn results_from_an_older_analysis_version_are_redone() {
+    let tmp = tempfile::tempdir().unwrap();
+    let id;
+    {
+        let mut lib = library_with_titles(tmp.path());
+        id = ids(&lib)[0];
+        let path = lib.track(id).unwrap().path;
+        let stamp = Library::stamp(&path).unwrap();
+        lib.save_analysis(id, &record(60.0, Some(116.0), None), stamp)
+            .unwrap();
+        assert!(
+            !lib.tracks_needing_analysis()
+                .unwrap()
+                .iter()
+                .any(|(t, _)| *t == id)
+        );
+    }
+    // Pretend the stored result came from analysis version 1.
+    {
+        let db = rusqlite::Connection::open(tmp.path().join("data/library.db")).unwrap();
+        db.execute("UPDATE analysis SET version = 1", []).unwrap();
+    }
+    let mut lib = library(tmp.path());
+    assert!(
+        lib.tracks_needing_analysis()
+            .unwrap()
+            .iter()
+            .any(|(t, _)| *t == id)
+    );
+}
+
+#[test]
 fn removing_from_library_leaves_audio_files_untouched() {
     let tmp = tempfile::tempdir().unwrap();
     let mut lib = library_with_titles(tmp.path());

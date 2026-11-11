@@ -249,8 +249,8 @@ impl Library {
         self.conn.execute(
             "INSERT OR REPLACE INTO analysis \
              (track_id, duration_ms, format, sample_rate, channels, bitrate, lossless, bpm, key, \
-              source_size, source_mtime) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+              source_size, source_mtime, version) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 id.0,
                 (rec.duration_secs * 1000.0).round() as i64,
@@ -263,6 +263,7 @@ impl Library {
                 rec.key.map(|k| i64::from(k.to_code())),
                 stamp.0,
                 stamp.1,
+                crate::ANALYSIS_VERSION,
             ],
         )?;
         self.conn.execute(
@@ -272,24 +273,29 @@ impl Library {
         Ok(())
     }
 
-    /// Tracks that need (re-)analysis: never analysed, or whose file changed size or
-    /// modification time since. Missing files are flagged and skipped.
+    /// Tracks that need (re-)analysis: never analysed, analysed by an older version of the
+    /// analysis, or whose file changed size or modification time since. Missing files are
+    /// flagged and skipped.
     pub fn tracks_needing_analysis(&mut self) -> Result<Vec<(TrackId, PathBuf)>> {
-        let rows: Vec<(i64, String, Option<i64>, Option<i64>)> = {
+        type Row = (i64, String, Option<i64>, Option<i64>, Option<i64>);
+        let rows: Vec<Row> = {
             let mut stmt = self.conn.prepare(
-                "SELECT t.id, t.path, a.source_size, a.source_mtime \
+                "SELECT t.id, t.path, a.source_size, a.source_mtime, a.version \
                  FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id ORDER BY t.id",
             )?;
-            stmt.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
-                .collect::<rusqlite::Result<_>>()?
+            stmt.query_map([], |r| {
+                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+            })?
+            .collect::<rusqlite::Result<_>>()?
         };
         let mut need = Vec::new();
         let mut missing = Vec::new();
-        for (id, path, size, mtime) in rows {
+        for (id, path, size, mtime, version) in rows {
             let path = PathBuf::from(path);
             match file_stamp(&path) {
                 Ok(stamp) => {
-                    if size.zip(mtime) != Some(stamp) {
+                    let outdated = version.is_some_and(|v| v < crate::ANALYSIS_VERSION);
+                    if size.zip(mtime) != Some(stamp) || outdated {
                         need.push((TrackId(id), path));
                     }
                 }

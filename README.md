@@ -53,6 +53,7 @@ directory, for example a throwaway test library.
 | `--test-tone [master\|headphones\|silent]` | Plays a 440 Hz tone for 3 s, then prints latency and overruns |
 | `--midi-monitor [filter]` | Logs raw MIDI from matching ports (default `DDJ-FLX2`); type hex bytes to send them |
 | `--import-folder <path>` | Imports and analyses a folder without opening the UI |
+| `--analyse [paths…]` | Prints BPM and key for files or folders (no paths: every library track, next to its stored BPM). Read-only |
 
 ```bash
 cargo run -p djk-app -- --list-audio-devices

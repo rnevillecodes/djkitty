@@ -30,6 +30,14 @@ fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow::anyhow!("--import-folder needs a folder path"))?;
         return devtools::import_folder(std::path::Path::new(folder));
     }
+    if let Some(i) = args.iter().position(|a| a == "--analyse") {
+        let paths: Vec<std::path::PathBuf> = args[i + 1..]
+            .iter()
+            .take_while(|a| !a.starts_with("--"))
+            .map(std::path::PathBuf::from)
+            .collect();
+        return devtools::analyse(&paths);
+    }
     if let Some(i) = args.iter().position(|a| a == "--midi-monitor") {
         let filter = args.get(i + 1).filter(|a| !a.starts_with("--")).cloned();
         return devtools::midi_monitor(filter.as_deref().unwrap_or("DDJ-FLX2"));

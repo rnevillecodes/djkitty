@@ -26,6 +26,13 @@ pub fn detect_bpm(stereo: &[f32], rate: u32) -> Option<f32> {
     tempo_from_envelope(&env, fps)
 }
 
+/// The envelope with its mean removed, so autocorrelation measures rhythmic structure
+/// rather than overall busyness (dense hats otherwise make every lag look similar).
+fn centred(env: &[f32]) -> Vec<f32> {
+    let mean = env.iter().sum::<f32>() / env.len().max(1) as f32;
+    env.iter().map(|v| v - mean).collect()
+}
+
 /// Half-wave rectified, log-compressed spectral flux with the local mean removed.
 fn onset_envelope(signal: &[f32]) -> Vec<f32> {
     let stft = Stft::new(FRAME, HOP);
@@ -78,10 +85,42 @@ fn parabolic(ym1: f32, y0: f32, y1: f32) -> f32 {
     }
 }
 
-/// Log-Gaussian tempo prior centred at 120 BPM.
+/// Typical DJ tempo range: tempos inside it are equally likely, so the rhythm alone
+/// decides between, say, 116 and 174. Outside it the prior falls away, which settles
+/// half/double-time ambiguity (87 vs 174, 64 vs 128) towards the range. (Music below
+/// 90 BPM may therefore read at double time, as many DJ apps do.)
+const PRIOR_LOW: f32 = 90.0;
+const PRIOR_HIGH: f32 = 180.0;
+/// Width of the fall-off outside the range, in octaves.
+const PRIOR_FALLOFF: f32 = 0.1;
+
 fn prior(bpm: f32) -> f32 {
-    let x = (bpm / 120.0).log2() / 0.9;
+    let octaves = if bpm < PRIOR_LOW {
+        (PRIOR_LOW / bpm).log2()
+    } else if bpm > PRIOR_HIGH {
+        (bpm / PRIOR_HIGH).log2()
+    } else {
+        return 1.0;
+    };
+    let x = octaves / PRIOR_FALLOFF;
     (-0.5 * x * x).exp()
+}
+
+/// Number of beat multiples checked when scoring a candidate period.
+const COMB_BEATS: usize = 4;
+
+/// Mean autocorrelation at 1..=COMB_BEATS multiples of `lag` (each the best value within
+/// a small window, since multiples of an integer lag drift from the true period).
+fn comb(r: &[f32], lag: usize) -> f32 {
+    let mut sum = 0.0;
+    for k in 1..=COMB_BEATS {
+        let centre = lag * k;
+        let tol = k / 2;
+        let lo = centre.saturating_sub(tol).max(1);
+        let hi = (centre + tol).min(r.len() - 1);
+        sum += r[lo..=hi].iter().copied().fold(f32::MIN, f32::max);
+    }
+    sum / COMB_BEATS as f32
 }
 
 fn tempo_from_envelope(env: &[f32], fps: f32) -> Option<f32> {
@@ -93,24 +132,29 @@ fn tempo_from_envelope(env: &[f32], fps: f32) -> Option<f32> {
     if sorted[sorted.len() * 99 / 100] < MIN_ONSET_STRENGTH {
         return None;
     }
+    let env = &centred(env);
     let r0 = autocorr(env, 0);
     if r0 <= 1e-9 {
         return None;
     }
     let min_lag = (60.0 * fps / MAX_BPM).floor() as usize;
     let max_lag = (60.0 * fps / MIN_BPM).ceil() as usize;
-    let r: Vec<f32> = (0..=max_lag + 1)
+    // Autocorrelation out to COMB_BEATS periods of the slowest tempo, for comb scoring.
+    let r: Vec<f32> = (0..=max_lag * COMB_BEATS + COMB_BEATS + 1)
         .map(|lag| autocorr(env, lag) / r0)
         .collect();
 
-    // Pick the lag with the best prior-weighted score among local maxima.
+    // Pick the lag with the best prior-weighted comb score among local maxima. Scoring
+    // a single lag is fooled by syncopation: drum & bass kicks 1.5 beats apart make 2/3
+    // of the tempo (174 -> 116) look strongest. The true beat period also lines up at 2,
+    // 3 and 4 beats; a 1.5-beat period does not (4.5 and 6 beats fall off the bar).
     let mut best: Option<(usize, f32)> = None;
     for lag in min_lag.max(2)..=max_lag {
         if r[lag] < r[lag - 1] || r[lag] < r[lag + 1] {
             continue;
         }
         let bpm = 60.0 * fps / lag as f32;
-        let score = r[lag] * prior(bpm);
+        let score = comb(&r, lag) * prior(bpm);
         if best.is_none_or(|(_, s)| score > s) {
             best = Some((lag, score));
         }
@@ -214,6 +258,74 @@ mod tests {
     #[test]
     fn detects_174() {
         assert_tempo(174.0);
+    }
+
+    /// A drum & bass "two-step" groove: kick on 1 and the "and" of 3, snare on 2 and 4,
+    /// closed hats on every 8th. The kicks repeat 1.5 beats apart, which at 174 BPM looks
+    /// like 116 BPM to a naive autocorrelation (regression: real DnB read as 116).
+    fn two_step(bpm: f32, secs: f32, rate: u32) -> Vec<f32> {
+        let n = (secs * rate as f32) as usize;
+        let mut out = vec![0.0f32; n * 2];
+        let beat = 60.0 / bpm * rate as f32;
+        let mut seed = 777u32;
+        let mut noise = move || {
+            seed = seed.wrapping_mul(1664525).wrapping_add(1013904223);
+            (seed >> 8) as f32 / (1u32 << 24) as f32 * 2.0 - 1.0
+        };
+        let mut hit = |out: &mut [f32], at: f32, kind: u8| {
+            let start = at as usize;
+            let len = rate as usize / 12;
+            for i in 0..len {
+                if start + i >= n {
+                    break;
+                }
+                let t = i as f32 / rate as f32;
+                let v = match kind {
+                    // Kick: pitch-dropping sine with a fast decay.
+                    0 => {
+                        0.9 * (-t / 0.06).exp()
+                            * (2.0 * std::f32::consts::PI * (50.0 + 80.0 * (-t / 0.02).exp()) * t)
+                                .sin()
+                    }
+                    // Snare: noise plus a body tone.
+                    1 => {
+                        0.7 * (-t / 0.05).exp()
+                            * (0.7 * noise() + 0.3 * (2.0 * std::f32::consts::PI * 190.0 * t).sin())
+                    }
+                    // Hat: short, quiet noise.
+                    _ => 0.18 * (-t / 0.008).exp() * noise(),
+                };
+                out[(start + i) * 2] += v;
+                out[(start + i) * 2 + 1] += v;
+            }
+        };
+        let mut bar = 0.0f32;
+        while (bar as usize) < n {
+            for (pos, kind) in [(0.0, 0u8), (2.5, 0), (1.0, 1), (3.0, 1)] {
+                hit(&mut out, bar + pos * beat, kind);
+            }
+            for e in 0..8 {
+                hit(&mut out, bar + e as f32 * 0.5 * beat, 2);
+            }
+            bar += 4.0 * beat;
+        }
+        out
+    }
+
+    #[test]
+    fn detects_drum_and_bass_two_step_at_174() {
+        let audio = two_step(174.0, 30.0, 44_100);
+        let bpm = detect_bpm(&audio, 44_100).expect("tempo detected");
+        assert!((bpm - 174.0).abs() <= 1.0, "got {bpm}");
+    }
+
+    #[test]
+    fn detects_two_step_at_other_tempos() {
+        for true_bpm in [140.0, 160.0, 170.0, 176.0] {
+            let audio = two_step(true_bpm, 30.0, 44_100);
+            let bpm = detect_bpm(&audio, 44_100).expect("tempo detected");
+            assert!((bpm - true_bpm).abs() <= 1.0, "true {true_bpm}, got {bpm}");
+        }
     }
 
     #[test]

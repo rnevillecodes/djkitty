@@ -133,6 +133,62 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
 
 /// `--import-folder <path>`: import a folder into the library without the UI, then analyse
 /// everything that needs it. Honours `DJKITTY_DATA_DIR`.
+/// `--analyse [paths…]`: print BPM and key for files (folders are searched). With no
+/// paths, re-analyses every track in the library and shows the stored BPM alongside.
+/// Read-only: audio files are only read and nothing is saved to the library.
+pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
+    // (file, stored BPM if known)
+    let mut files: Vec<(std::path::PathBuf, Option<f32>)> = Vec::new();
+    if paths.is_empty() {
+        let lib = djk_library::Library::open_default()?;
+        for t in lib.tracks(&djk_library::TrackQuery::default())? {
+            files.push((t.path.clone(), t.bpm));
+        }
+        println!(
+            "Analysing {} library tracks (nothing is saved)\n",
+            files.len()
+        );
+    } else {
+        fn walk(p: &std::path::Path, out: &mut Vec<(std::path::PathBuf, Option<f32>)>) {
+            if p.is_dir() {
+                if let Ok(rd) = std::fs::read_dir(p) {
+                    let mut entries: Vec<_> = rd.flatten().map(|e| e.path()).collect();
+                    entries.sort();
+                    for e in entries {
+                        walk(&e, out);
+                    }
+                }
+            } else if djk_analysis::is_supported(p) {
+                out.push((p.to_path_buf(), None));
+            }
+        }
+        for p in paths {
+            walk(p, &mut files);
+        }
+    }
+    println!("{:>8}  {:>8}  {:>4}  file", "stored", "now", "key");
+    for (path, stored) in files {
+        let name = path
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        match djk_analysis::analyse_file(&path) {
+            Ok(a) => println!(
+                "{:>8}  {:>8}  {:>4}  {name}",
+                stored
+                    .map(|b| format!("{b:.1}"))
+                    .unwrap_or_else(|| "-".into()),
+                a.bpm
+                    .map(|b| format!("{b:.1}"))
+                    .unwrap_or_else(|| "?".into()),
+                a.key.map(|k| k.camelot()).unwrap_or_else(|| "?".into()),
+            ),
+            Err(e) => println!("{:>8}  {:>8}  {:>4}  {name}  ({e})", "-", "error", ""),
+        }
+    }
+    Ok(())
+}
+
 pub fn import_folder(folder: &std::path::Path) -> anyhow::Result<()> {
     let dir = djk_library::default_data_dir()?;
     let mut lib = djk_library::Library::open_in(&dir)?;

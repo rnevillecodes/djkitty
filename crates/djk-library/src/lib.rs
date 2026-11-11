@@ -15,6 +15,13 @@ use rusqlite::Connection;
 
 pub use import::{ImportSummary, read_tags};
 pub use schema::LATEST as SCHEMA_VERSION;
+
+/// Version of the analysis results the library stores. Bump it whenever analysis changes
+/// in a way that alters results, so existing tracks are re-analysed in the background.
+///
+/// 2: BPM detection scores whole beat combs over a 90–180 BPM range (fixes drum & bass
+///    at 174 BPM reading as 116).
+pub const ANALYSIS_VERSION: i64 = 2;
 pub use sets::{SetId, SetSummary};
 pub use tracks::{AnalysisRecord, SortKey, TrackQuery, TrackRow, matches_search as tracks_match};
 
