@@ -8,7 +8,9 @@ use rustfft::{Fft, FftPlanner};
 /// Mix interleaved stereo down to mono.
 pub fn to_mono(stereo: &[f32]) -> Vec<f32> {
     stereo
-        .chunks_exact(2)
+        .as_chunks::<2>()
+        .0
+        .iter()
         .map(|f| 0.5 * (f[0] + f[1]))
         .collect()
 }

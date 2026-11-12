@@ -53,7 +53,9 @@ impl Peaks {
             .chunks(Self::BLOCK * 2)
             .map(|chunk| {
                 chunk
-                    .chunks_exact(2)
+                    .as_chunks::<2>()
+                    .0
+                    .iter()
                     .map(|f| 0.5 * (f[0] + f[1]))
                     .fold((f32::MAX, f32::MIN), |(lo, hi), v| (lo.min(v), hi.max(v)))
             })
