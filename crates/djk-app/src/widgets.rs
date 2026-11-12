@@ -8,10 +8,10 @@
 use egui::epaint::PathShape;
 use egui::{
     Align2, Color32, CornerRadius, FontId, Mesh, Painter, Pos2, Rect, Response, Sense, Shape,
-    Stroke, StrokeKind, Ui, Vec2, pos2, vec2,
+    Stroke, Ui, Vec2, pos2, vec2,
 };
 
-use crate::theme;
+use crate::{sheen, theme};
 
 /// Linear blend between two colours (`t` = 0 gives `a`).
 pub fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
@@ -106,6 +106,7 @@ pub fn fader(
     style: FaderStyle,
 ) -> (Response, Option<f32>) {
     let (rect, resp) = ui.allocate_exact_size(size, Sense::click_and_drag());
+    crate::layout_dump::record("fader", rect);
     let cap = if vertical {
         vec2(size.x.min(34.0), 18.0)
     } else {
@@ -167,17 +168,7 @@ pub fn fader(
     } else {
         vec2(2.0, slot_w / 2.0)
     });
-    painter.rect_filled(
-        slot,
-        CornerRadius::same(3),
-        Color32::from_rgb(0x07, 0x08, 0x0a),
-    );
-    painter.rect_stroke(
-        slot,
-        CornerRadius::same(3),
-        Stroke::new(1.0, Color32::from_white_alpha(10)),
-        StrokeKind::Outside,
-    );
+    sheen::well(&painter, slot, f32::from(theme::R_CONTROL));
     let cap_centre = start + span * shown;
     if style.fill {
         let lit = Rect::from_two_pos(start, cap_centre).expand2(if vertical {
@@ -196,35 +187,18 @@ pub fn fader(
         let n = vec2(axis.y, -axis.x);
         painter.line_segment(
             [c - n * (slot_w + 3.0), c + n * (slot_w + 3.0)],
-            Stroke::new(1.5, style.accent.gamma_multiply(0.8)),
+            Stroke::new(1.5, theme::TEXT_DIM),
         );
     }
-    // Cap: drop shadow, two-tone body, grip lines and an indicator line.
+    // Cap: a raised, top-lit block with grip grooves and a light indicator line.
     let cap_rect = Rect::from_center_size(cap_centre, cap);
     let hot = resp.hovered() || resp.dragged();
-    painter.rect_filled(
-        cap_rect.translate(vec2(0.0, 2.0)).expand(1.0),
-        CornerRadius::same(4),
-        Color32::from_black_alpha(120),
-    );
-    let (top, bottom) = if hot {
-        (
-            Color32::from_rgb(0x5a, 0x60, 0x6c),
-            Color32::from_rgb(0x34, 0x38, 0x41),
-        )
-    } else {
-        (
-            Color32::from_rgb(0x4a, 0x4f, 0x5a),
-            Color32::from_rgb(0x2a, 0x2d, 0x34),
-        )
-    };
-    painter.rect_filled(cap_rect, CornerRadius::same(4), bottom);
-    vertical_gradient(&painter, cap_rect.shrink(1.5), top, bottom);
-    painter.rect_stroke(
+    sheen::raised(
+        &painter,
         cap_rect,
-        CornerRadius::same(4),
-        Stroke::new(1.0, Color32::from_black_alpha(160)),
-        StrokeKind::Outside,
+        f32::from(theme::R_CONTROL),
+        if hot { theme::CAP_HOT } else { theme::CAP },
+        theme::SHEEN * 2.0,
     );
     let n = vec2(axis.y, -axis.x);
     let half = if vertical {
@@ -236,12 +210,12 @@ pub fn fader(
         let c = cap_centre + axis * k * 4.5;
         painter.line_segment(
             [c - n * half, c + n * half],
-            Stroke::new(1.0, Color32::from_black_alpha(90)),
+            Stroke::new(1.0, theme::GROOVE),
         );
     }
     painter.line_segment(
         [cap_centre - n * half, cap_centre + n * half],
-        Stroke::new(2.0, if hot { Color32::WHITE } else { style.accent }),
+        Stroke::new(2.0, if hot { theme::PLAYHEAD } else { theme::TEXT }),
     );
     if hot {
         ui.ctx().set_cursor_icon(if vertical {
@@ -275,6 +249,7 @@ pub fn knob(
         Sense::hover()
     };
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter), sense);
+    crate::layout_dump::record("knob", rect);
     let out = if enabled {
         let v = value_input(ui, &resp, t, default_t, 140.0, vec2(0.0, -1.0));
         if bipolar && resp.dragged() {
@@ -308,7 +283,7 @@ pub fn knob(
         KNOB_START,
         KNOB_START + KNOB_SWEEP,
         r - 2.0,
-        Stroke::new(3.0, Color32::from_rgb(0x07, 0x08, 0x0a)),
+        Stroke::new(3.0, theme::WELL),
     );
     let from = if bipolar { 0.5 } else { 0.0 };
     if (shown - from).abs() > 0.001 {
@@ -327,32 +302,21 @@ pub fn knob(
             Stroke::new(1.5, theme::TEXT_DIM),
         );
     }
-    // Body with a highlight towards the top.
+    // Cap: a round, top-lit body with a light pointer.
     let body_r = r - 7.0;
-    painter.circle_filled(
-        c + vec2(0.0, 1.5),
-        body_r + 1.0,
-        Color32::from_black_alpha(140),
+    let hot = enabled && (resp.hovered() || resp.dragged());
+    sheen::round_lit(
+        &painter,
+        c,
+        body_r,
+        if hot { theme::CAP_HOT } else { theme::CAP },
+        theme::SHEEN * 2.5,
     );
-    painter.circle_filled(c, body_r, Color32::from_rgb(0x2a, 0x2d, 0x34));
-    painter.circle_filled(
-        c - vec2(0.0, body_r * 0.25),
-        body_r * 0.7,
-        Color32::from_rgb(0x34, 0x38, 0x41),
-    );
-    painter.circle_stroke(c, body_r, Stroke::new(1.0, Color32::from_white_alpha(18)));
     let a = KNOB_START + KNOB_SWEEP * shown;
     let dir = vec2(a.cos(), a.sin());
     painter.line_segment(
         [c + dir * body_r * 0.25, c + dir * (body_r - 2.0)],
-        Stroke::new(
-            2.0,
-            if resp.hovered() || resp.dragged() {
-                Color32::WHITE
-            } else {
-                theme::TEXT
-            },
-        ),
+        Stroke::new(2.0, if hot { theme::PLAYHEAD } else { theme::TEXT }),
     );
     if enabled && (resp.hovered() || resp.dragged()) {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeVertical);
@@ -376,45 +340,27 @@ pub fn pad(
         Sense::hover()
     };
     let (rect, resp) = ui.allocate_exact_size(size, sense);
+    crate::layout_dump::record("pad", rect);
     let painter = ui.painter_at(rect.expand(3.0));
     let pressed = resp.is_pointer_button_down_on();
     let hovered = resp.hovered() && enabled;
-    let r = CornerRadius::same(5);
-    painter.rect_filled(
-        rect.translate(vec2(0.0, 1.5)),
-        r,
-        Color32::from_black_alpha(140),
-    );
-    let body = rect.translate(vec2(0.0, if pressed { 1.0 } else { 0.0 }));
+    // Satin rubber, lit from above; backlit in its colour when lit. Pressing darkens it
+    // (the light no longer catches the top) rather than moving it.
+    let r = f32::from(theme::R_CONTROL);
     let fill = if lit {
-        mix(
-            Color32::from_rgb(0x26, 0x29, 0x30),
-            colour,
-            if pressed { 0.9 } else { 0.7 },
-        )
+        mix(theme::RAISED, colour, if pressed { 0.95 } else { 0.8 })
     } else if hovered {
-        Color32::from_rgb(0x34, 0x38, 0x41)
+        theme::RAISED_HOVER
     } else {
-        Color32::from_rgb(0x26, 0x29, 0x30)
+        theme::RAISED
     };
-    painter.rect_filled(body, r, fill);
-    painter.rect_stroke(
-        body,
-        r,
-        Stroke::new(
-            1.0,
-            if lit {
-                colour
-            } else {
-                Color32::from_white_alpha(16)
-            },
-        ),
-        StrokeKind::Inside,
-    );
+    let sheen = if pressed { 0.0 } else { theme::SHEEN * 1.5 };
+    sheen::raised(&painter, rect, r, fill, sheen);
+    let body = rect;
     let ink = if !enabled {
         theme::TEXT_DIM.gamma_multiply(0.5)
     } else if lit {
-        Color32::from_rgb(0x12, 0x14, 0x18)
+        theme::BG
     } else {
         theme::TEXT_DIM
     };
@@ -429,6 +375,67 @@ pub fn pad(
         ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
     }
     resp
+}
+
+/// A framed button drawn as a raised, top-lit key (egui's own frame is replaced; its size
+/// and layout are unchanged). `selected` shows it pressed in, for toggle switches.
+pub fn lit_button(
+    ui: &mut Ui,
+    enabled: bool,
+    selected: bool,
+    button: egui::Button<'_>,
+) -> Response {
+    let background = ui.painter().add(Shape::Noop);
+    let resp = ui.add_enabled(
+        enabled,
+        button.fill(Color32::TRANSPARENT).stroke(Stroke::NONE),
+    );
+    paint_lit(ui, background, &resp, enabled, selected);
+    resp
+}
+
+/// [`lit_button`] at an exact size, with its label centred (like `Ui::add_sized`).
+pub fn lit_button_sized(
+    ui: &mut Ui,
+    size: Vec2,
+    selected: bool,
+    button: egui::Button<'_>,
+) -> Response {
+    let background = ui.painter().add(Shape::Noop);
+    let resp = ui.add_sized(size, button.fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
+    paint_lit(ui, background, &resp, true, selected);
+    resp
+}
+
+/// Paint a lit key behind a button already laid out at `resp.rect`, into the
+/// `background` placeholder added before it.
+fn paint_lit(
+    ui: &Ui,
+    background: egui::layers::ShapeIdx,
+    resp: &Response,
+    enabled: bool,
+    selected: bool,
+) {
+    let pressed = resp.is_pointer_button_down_on();
+    let (base, sheen) = if !enabled || pressed {
+        (theme::PANEL, 0.0)
+    } else if selected {
+        (theme::CAP, theme::SHEEN)
+    } else if resp.hovered() {
+        (theme::RAISED_HOVER, theme::SHEEN)
+    } else {
+        (theme::RAISED, theme::SHEEN)
+    };
+    ui.painter().set(
+        background,
+        Shape::Vec(sheen::raised_shapes(
+            resp.rect,
+            f32::from(theme::R_CONTROL),
+            base,
+            sheen,
+            theme::EDGE_DARK,
+        )),
+    );
 }
 
 /// What a round transport button draws in its centre.
@@ -455,6 +462,7 @@ pub fn transport_button(
         Sense::hover()
     };
     let (rect, resp) = ui.allocate_exact_size(Vec2::splat(diameter + 8.0), sense);
+    crate::layout_dump::record("transport", rect);
     let painter = ui.painter_at(rect.expand(10.0));
     let c = rect.center();
     let r = diameter / 2.0;
@@ -463,32 +471,16 @@ pub fn transport_button(
     if lit > 0.05 {
         glow(&painter, c, r, led, lit);
     }
-    // Ring (the LED) and body.
-    painter.circle_filled(c + vec2(0.0, 2.0), r + 1.0, Color32::from_black_alpha(150));
-    let ring = mix(Color32::from_rgb(0x3a, 0x3e, 0x47), led, lit);
-    painter.circle_filled(c, r, ring);
+    // LED ring (dark when off), then the round, top-lit body inside it.
+    painter.circle_filled(c, r, mix(theme::LED_OFF, led, lit));
+    painter.circle_stroke(c, r, Stroke::new(1.0, theme::EDGE_DARK));
     let body_r = r - 3.5;
-    let (top, bottom) = match (pressed, hovered) {
-        (true, _) => (
-            Color32::from_rgb(0x1c, 0x1e, 0x23),
-            Color32::from_rgb(0x26, 0x29, 0x30),
-        ),
-        (false, true) => (
-            Color32::from_rgb(0x3c, 0x41, 0x4b),
-            Color32::from_rgb(0x24, 0x27, 0x2e),
-        ),
-        _ => (
-            Color32::from_rgb(0x32, 0x36, 0x3e),
-            Color32::from_rgb(0x1e, 0x21, 0x27),
-        ),
+    let (base, sheen) = match (pressed, hovered) {
+        (true, _) => (theme::PANEL, 0.0),
+        (false, true) => (theme::RAISED_HOVER, theme::SHEEN * 2.0),
+        _ => (theme::RAISED, theme::SHEEN * 2.0),
     };
-    painter.circle_filled(c, body_r, bottom);
-    painter.circle_filled(
-        c - vec2(0.0, body_r * 0.22),
-        body_r * 0.78,
-        mix(bottom, top, 0.7),
-    );
-    painter.circle_stroke(c, body_r, Stroke::new(1.0, Color32::from_black_alpha(160)));
+    sheen::round_lit(&painter, c, body_r, base, sheen);
     let ink = if !enabled {
         theme::TEXT_DIM.gamma_multiply(0.5)
     } else if lit > 0.5 {
@@ -572,12 +564,9 @@ impl Ballistic {
 
 /// A vertical segmented LED meter in `rect`.
 pub fn meter(painter: &Painter, rect: Rect, b: Ballistic) {
+    crate::layout_dump::record("meter", rect);
     const SEGMENTS: usize = 18;
-    painter.rect_filled(
-        rect.expand(1.5),
-        CornerRadius::same(2),
-        Color32::from_rgb(0x07, 0x08, 0x0a),
-    );
+    sheen::well(painter, rect.expand(1.5), 2.0);
     let gap = 1.5;
     let seg_h = (rect.height() - gap * (SEGMENTS - 1) as f32) / SEGMENTS as f32;
     let hold_seg = (b.hold * SEGMENTS as f32).ceil() as usize;
@@ -586,7 +575,7 @@ pub fn meter(painter: &Painter, rect: Rect, b: Ballistic) {
         let colour = if f > 0.94 {
             theme::DANGER
         } else if f > 0.8 {
-            Color32::from_rgb(0xf5, 0xd0, 0x3c)
+            theme::METER_HOT
         } else {
             theme::OK
         };
@@ -599,7 +588,8 @@ pub fn meter(painter: &Painter, rect: Rect, b: Ballistic) {
             if lit {
                 colour
             } else {
-                colour.gamma_multiply(0.12)
+                // Off: barely there, a hint of its colour on the dark unlit LED.
+                mix(theme::LED_OFF, colour, 0.08)
             },
         );
     }
@@ -607,24 +597,10 @@ pub fn meter(painter: &Painter, rect: Rect, b: Ballistic) {
 
 /// Paint a recessed "screen" (for BPM, key and time readouts) and return its inner rect.
 pub fn screen(painter: &Painter, rect: Rect) -> Rect {
-    painter.rect_filled(
-        rect,
-        CornerRadius::same(6),
-        Color32::from_rgb(0x0b, 0x0d, 0x10),
-    );
-    // Inner shadow along the top edge.
-    vertical_gradient(
-        painter,
-        Rect::from_min_size(rect.min + vec2(3.0, 1.0), vec2(rect.width() - 6.0, 6.0)),
-        Color32::from_black_alpha(90),
-        Color32::TRANSPARENT,
-    );
-    painter.rect_stroke(
-        rect,
-        CornerRadius::same(6),
-        Stroke::new(1.0, Color32::from_white_alpha(12)),
-        StrokeKind::Inside,
-    );
+    crate::layout_dump::record("screen", rect);
+    // Recessed, with a faint glass reflection (drawn under the readout text).
+    sheen::well(painter, rect, f32::from(theme::R_CONTROL));
+    sheen::glass(painter, rect);
     rect.shrink(8.0)
 }
 

@@ -856,5 +856,6 @@ impl eframe::App for DjApp {
         if hovering {
             crate::ui::drop_overlay(self, &ctx);
         }
+        crate::layout_dump::end_frame();
     }
 }

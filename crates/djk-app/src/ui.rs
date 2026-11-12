@@ -13,6 +13,8 @@ use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
 use egui_extras::{Column, TableBuilder};
 
 use crate::app::{DjApp, View};
+use crate::layout_dump::record as dump;
+use crate::sheen;
 use crate::theme;
 use crate::util::fmt_time;
 use crate::waveview;
@@ -32,28 +34,30 @@ const LANE_GAP: f32 = 4.0;
 const MIN_BROWSER_HEIGHT: f32 = 280.0;
 
 pub fn layout(app: &mut DjApp, ui: &mut Ui) {
-    egui::Panel::bottom("status")
+    let r = egui::Panel::bottom("status")
         .frame(
             egui::Frame::new()
                 .fill(theme::BG)
                 .inner_margin(egui::Margin::symmetric(10, 4)),
         )
         .show(ui, |ui| status_bar(app, ui));
+    dump("panel.status", r.response.rect);
     // Lanes grow with the window, but never squeeze the library below its minimum.
     // (Three quarters of the space they could take, leaving more room for the library.)
     let lane_h = ((ui.available_height() - DECKS_ROW_HEIGHT - MIN_BROWSER_HEIGHT - 40.0) / 2.0)
         .clamp(80.0, 170.0)
         * 0.75;
-    egui::Panel::top("decks")
+    let r = egui::Panel::top("decks")
         .resizable(false)
         .exact_size(2.0 * lane_h + LANE_GAP + 8.0 + DECKS_ROW_HEIGHT)
-        .frame(egui::Frame::new().fill(theme::TOP_BG).inner_margin(8))
+        .frame(egui::Frame::new().fill(theme::BG).inner_margin(8))
         .show(ui, |ui| {
             waveform_lanes(app, ui, lane_h);
             ui.add_space(8.0);
             decks_row(app, ui);
         });
-    egui::Panel::left("sidebar")
+    dump("panel.top", r.response.rect);
+    let r = egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(230.0)
         .size_range(190.0..=360.0)
@@ -63,9 +67,10 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
                 .inner_margin(egui::Margin::symmetric(10, 4)),
         )
         .show(ui, |ui| sidebar(app, ui));
+    dump("panel.sidebar", r.response.rect);
     // Track details only take space while a track is selected.
     if app.selected_row().is_some() {
-        egui::Panel::right("details")
+        let r = egui::Panel::right("details")
             .resizable(true)
             .default_size(270.0)
             .size_range(230.0..=400.0)
@@ -80,8 +85,10 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
                     .auto_shrink([false, false])
                     .show(ui, |ui| track_details(app, ui));
             });
+        dump("panel.details", r.response.rect);
     }
-    egui::CentralPanel::default().show(ui, |ui| browser(app, ui));
+    let r = egui::CentralPanel::default().show(ui, |ui| browser(app, ui));
+    dump("panel.library", r.response.rect);
     if app.show_shortcuts {
         shortcuts_window(app, ui.ctx());
     }
@@ -185,8 +192,7 @@ fn grid_tools(
                 let fine = ui.input(|i| i.modifiers.shift);
                 if editing {
                     // Right to left is awkward with egui; build left to right instead.
-                    if ui
-                        .button("Set 1 here")
+                    if widgets::lit_button(ui, true, false, egui::Button::new("Set 1 here"))
                         .on_hover_text(
                             "Make the beat at the playhead beat 1 of a bar \
                              (snaps to the nearest kick or transient)",
@@ -198,16 +204,28 @@ fn grid_tools(
                     }
                     let step = if fine { 0.010 } else { 0.001 };
                     let nudge_hint = "Move the whole grid by 1 ms (Shift: 10 ms)";
-                    if ui.button("Earlier").on_hover_text(nudge_hint).clicked() {
+                    if widgets::lit_button(ui, true, false, egui::Button::new("Earlier"))
+                        .on_hover_text(nudge_hint)
+                        .clicked()
+                    {
                         app.set_deck_grid(deck, g.nudged(-step), true);
                     }
-                    if ui.button("Later").on_hover_text(nudge_hint).clicked() {
+                    if widgets::lit_button(ui, true, false, egui::Button::new("Later"))
+                        .on_hover_text(nudge_hint)
+                        .clicked()
+                    {
                         app.set_deck_grid(deck, g.nudged(step), true);
                     }
-                    if ui.button("÷2").on_hover_text("Halve the tempo").clicked() {
+                    if widgets::lit_button(ui, true, false, egui::Button::new("÷2"))
+                        .on_hover_text("Halve the tempo")
+                        .clicked()
+                    {
                         app.set_deck_grid(deck, g.with_bpm(g.bpm / 2.0, pos), true);
                     }
-                    if ui.button("×2").on_hover_text("Double the tempo").clicked() {
+                    if widgets::lit_button(ui, true, false, egui::Button::new("×2"))
+                        .on_hover_text("Double the tempo")
+                        .clicked()
+                    {
                         app.set_deck_grid(deck, g.with_bpm(g.bpm * 2.0, pos), true);
                     }
                     let mut bpm = g.bpm;
@@ -223,8 +241,7 @@ fn grid_tools(
                     if resp.changed() {
                         app.set_deck_grid(deck, g.with_bpm(bpm, pos), true);
                     }
-                    if ui
-                        .add_enabled(stored.edited, egui::Button::new("Reset"))
+                    if widgets::lit_button(ui, stored.edited, false, egui::Button::new("Reset"))
                         .on_hover_text("Go back to the detected beatgrid")
                         .on_disabled_hover_text("The grid is as detected")
                         .clicked()
@@ -238,8 +255,7 @@ fn grid_tools(
                     } else {
                         theme::TEXT_DIM
                     }),
-                )
-                .fill(if editing { accent } else { theme::RAISED });
+                );
                 let tip = if editing {
                     "Finish editing the beatgrid"
                 } else if stored.edited {
@@ -247,7 +263,13 @@ fn grid_tools(
                 } else {
                     "Edit the beatgrid (as detected)"
                 };
-                if ui.add(chip).on_hover_text(tip).clicked() {
+                // Lit in the deck's colour while editing (a state), a plain key otherwise.
+                let chip = if editing {
+                    ui.add(chip.fill(accent))
+                } else {
+                    widgets::lit_button(ui, true, false, chip)
+                };
+                if chip.on_hover_text(tip).clicked() {
                     let d = &mut app.decks[deck.index()];
                     d.grid_editing = !d.grid_editing;
                 }
@@ -291,13 +313,13 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
-/// A raised panel: lighter than the section behind it, with a soft drop shadow, a crisp
-/// border and a thin accent strip along the top edge.
-fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
+/// A panel: a step lighter than the window behind it, satin-lit from above (a gentle
+/// gradient and a fine highlight along the top edge) with a hairline border. No shadow.
+fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Rect {
     let background = ui.painter().add(egui::Shape::Noop);
+    // The frame's (invisible) 1px stroke keeps the content where it has always been.
     let rect = egui::Frame::new()
-        .stroke(egui::Stroke::new(1.0, theme::CARD_BORDER))
-        .corner_radius(10)
+        .stroke(egui::Stroke::new(1.0, Color32::TRANSPARENT))
         .inner_margin(egui::Margin {
             left: 10,
             right: 10,
@@ -311,26 +333,18 @@ fn card(ui: &mut Ui, accent: Color32, add: impl FnOnce(&mut Ui)) -> Rect {
         .response
         .rect;
 
-    // Paint the background behind the content, now that the size is known: shadow,
-    // panel, then the accent strip along the top edge.
-    let shadow = egui::epaint::Shadow {
-        offset: [0, 4],
-        blur: 14,
-        spread: 0,
-        color: Color32::from_black_alpha(150),
-    };
-    let strip = Rect::from_min_size(
-        rect.min + Vec2::new(14.0, 0.0),
-        Vec2::new(rect.width() - 28.0, 2.0),
-    );
+    // Paint the panel behind the content, now that its size is known.
     ui.painter().set(
         background,
-        egui::Shape::Vec(vec![
-            egui::Shape::Rect(shadow.as_shape(rect, 10)),
-            egui::Shape::rect_filled(rect, 10, theme::CARD),
-            egui::Shape::rect_filled(strip, 1, accent.gamma_multiply(0.85)),
-        ]),
+        egui::Shape::Vec(sheen::raised_shapes(
+            rect,
+            f32::from(theme::R_PANEL),
+            theme::PANEL,
+            theme::PANEL_SHEEN,
+            theme::HAIRLINE,
+        )),
     );
+    dump("card", rect);
     rect
 }
 
@@ -367,10 +381,12 @@ fn track_drop_target(
         egui::Order::Foreground,
         egui::Id::unique("track_drop_highlight"),
     ));
-    painter.rect_filled(rect, 8.0, accent.gamma_multiply(0.08));
+    // The deck colour shows which deck the track will load onto.
+    let r = f32::from(theme::R_PANEL);
+    painter.rect_filled(rect, r, accent.gamma_multiply(0.08));
     painter.rect_stroke(
         rect,
-        8.0,
+        r,
         egui::Stroke::new(2.0, accent),
         egui::StrokeKind::Inside,
     );
@@ -381,12 +397,11 @@ fn track_drop_target(
 }
 
 fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
-    let accent = theme::deck_colour(deck);
     let state = app.audio.state;
     let s = *state.deck(deck);
     let now = Instant::now();
     let blink = (app.start_time.elapsed().as_millis() / 500) % 2 == 0;
-    let rect = card(ui, accent, |ui| {
+    let rect = card(ui, |ui| {
         let full = ui.available_rect_before_wrap();
         let pitch_w = 58.0;
         let main = Rect::from_min_max(
@@ -435,16 +450,31 @@ fn deck_main(
     let screen_w = if narrow { 92.0 } else { 132.0 };
     let title_size = if narrow { 14.0 } else { 16.0 };
     ui.horizontal(|ui| {
-        let (badge, _) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
+        // Deck tag: a small raised key with the letter in the deck's colour and a short
+        // underline of it (in the same 34pt slot the old round badge used).
+        let (slot, _) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
+        let tag = Rect::from_center_size(slot.center(), Vec2::new(26.0, 28.0));
         let p = ui.painter();
-        p.circle_filled(badge.center(), 16.0, accent.gamma_multiply(0.18));
-        p.circle_stroke(badge.center(), 16.0, egui::Stroke::new(1.5, accent));
+        sheen::raised(
+            p,
+            tag,
+            f32::from(theme::R_CONTROL),
+            theme::RAISED,
+            theme::SHEEN,
+        );
         p.text(
-            badge.center(),
+            tag.center() - Vec2::new(0.0, 1.5),
             egui::Align2::CENTER_CENTER,
             deck.label(),
-            egui::FontId::proportional(18.0),
+            egui::FontId::proportional(16.0),
             accent,
+        );
+        p.line_segment(
+            [
+                egui::pos2(tag.left() + 7.0, tag.bottom() - 4.0),
+                egui::pos2(tag.right() - 7.0, tag.bottom() - 4.0),
+            ],
+            egui::Stroke::new(2.0, accent),
         );
         ui.vertical(|ui| {
             ui.set_width((width - screen_w - 56.0).max(40.0));
@@ -792,20 +822,19 @@ fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
                 (PadMode::BeatLoop, "LOOP", "Pads start beat loops"),
             ] {
                 let on = mode == m;
-                let b = ui
-                    .add_sized(
-                        [38.0, PAD_HEIGHT],
-                        egui::Button::new(RichText::new(label).size(9.0).color(if on {
-                            theme::TEXT
-                        } else {
-                            theme::TEXT_DIM
-                        }))
-                        .selected(on)
-                        .corner_radius(3),
-                    )
-                    .on_hover_text(format!(
-                        "{tip} (on the DDJ-FLX2: SHIFT + BEAT SYNC, then a pad)"
-                    ));
+                let b = widgets::lit_button_sized(
+                    ui,
+                    Vec2::new(38.0, PAD_HEIGHT),
+                    on,
+                    egui::Button::new(RichText::new(label).size(9.0).color(if on {
+                        theme::TEXT
+                    } else {
+                        theme::TEXT_DIM
+                    })),
+                )
+                .on_hover_text(format!(
+                    "{tip} (on the DDJ-FLX2: SHIFT + BEAT SYNC, then a pad)"
+                ));
                 if b.clicked() {
                     app.set_pad_mode(deck, m);
                 }
@@ -1005,7 +1034,7 @@ fn levels_panel(app: &mut DjApp, ui: &mut Ui) {
     let m = state.mixer;
     let defaults = MixerState::default();
     let phones_ok = state.headphones_available();
-    card(ui, theme::TEXT_DIM, |ui| {
+    card(ui, |ui| {
         let full = ui.available_rect_before_wrap();
         let lay = StripLayout::new(full.height());
         let d = 38.0;
@@ -1054,7 +1083,7 @@ fn levels_panel(app: &mut DjApp, ui: &mut Ui) {
 /// The master output meter (left and right), in its own panel right of the mixer.
 fn master_panel(app: &mut DjApp, ui: &mut Ui) {
     let meters = app.meters;
-    card(ui, theme::TEXT_DIM, |ui| {
+    card(ui, |ui| {
         let full = ui.available_rect_before_wrap();
         let lay = StripLayout::new(full.height());
         let w = 16.0;
@@ -1079,7 +1108,7 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let m = state.mixer;
     let defaults = MixerState::default();
     let meters = app.meters;
-    let rect = card(ui, theme::TEXT_DIM, |ui| {
+    let rect = card(ui, |ui| {
         let full = ui.available_rect_before_wrap();
         // Columns, left to right: deck A EQ, A meter, A fader, B fader, B meter, deck B EQ.
         let content_w = 170.0;
@@ -1224,16 +1253,17 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
         section_heading(ui, "SETS");
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
             ui.spacing_mut().button_padding = egui::vec2(6.0, 2.0);
-            let plus = ui
-                .add(
-                    egui::Button::image_and_text(
-                        widgets::icon(widgets::icons::PLUS, 11.0, theme::TEXT),
-                        RichText::new("Add").size(11.0),
-                    )
-                    .min_size(Vec2::new(0.0, 20.0))
-                    .corner_radius(5),
+            let plus = widgets::lit_button(
+                ui,
+                true,
+                false,
+                egui::Button::image_and_text(
+                    widgets::icon(widgets::icons::PLUS, 11.0, theme::TEXT),
+                    RichText::new("Add").size(11.0),
                 )
-                .on_hover_text("New set");
+                .min_size(Vec2::new(0.0, 20.0)),
+            )
+            .on_hover_text("New set");
             if plus.clicked() {
                 app.new_set_name.clear();
                 app.new_set_dialog = true;
@@ -1387,16 +1417,14 @@ fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
         }
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            let save = egui::Button::new(RichText::new("Create").strong())
-                .fill(theme::DECK_A.gamma_multiply(0.45))
-                .min_size(Vec2::new(80.0, 28.0));
-            if ui.add_enabled(valid, save).clicked() {
+            // The default action is the brighter key (neutral: deck colours mean decks).
+            let save =
+                egui::Button::new(RichText::new("Create").strong()).min_size(Vec2::new(80.0, 28.0));
+            if widgets::lit_button(ui, valid, true, save).clicked() {
                 create = true;
             }
-            if ui
-                .add(egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0)))
-                .clicked()
-            {
+            let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
+            if widgets::lit_button(ui, true, false, cancel).clicked() {
                 close = true;
             }
         });
@@ -1454,13 +1482,12 @@ fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
             let confirm = egui::Button::new(RichText::new("Remove").strong())
                 .fill(theme::DANGER.gamma_multiply(0.45))
                 .min_size(Vec2::new(90.0, 28.0));
+            // Removing keeps its danger tint: the colour means something here.
             if ui.add(confirm).clicked() {
                 remove = true;
             }
-            if ui
-                .add(egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0)))
-                .clicked()
-            {
+            let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
+            if widgets::lit_button(ui, true, false, cancel).clicked() {
                 close = true;
             }
         });
@@ -1512,21 +1539,22 @@ fn truncated(
 }
 
 /// A set row: playlist icon tile, title and optional subtitle, with hover and selected
-/// states (selected rows get a tinted fill and an accent bar).
+/// states (selected rows are a lit key with a light marker bar; all neutral, since colour
+/// is kept for decks).
 fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) -> egui::Response {
     let h = if subtitle.is_some() { 44.0 } else { 34.0 };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let p = ui.painter();
-    let accent = theme::DECK_A;
+    let r = f32::from(theme::R_CONTROL);
     if selected {
-        p.rect_filled(rect, 7, accent.gamma_multiply(0.14));
+        sheen::raised(p, rect, r, theme::RAISED_HOVER, theme::SHEEN);
         p.rect_filled(
-            Rect::from_min_size(rect.min + Vec2::new(0.0, 8.0), Vec2::new(3.0, h - 16.0)),
-            2,
-            accent,
+            Rect::from_min_size(rect.min + Vec2::new(0.0, 8.0), Vec2::new(2.0, h - 16.0)),
+            1,
+            theme::TEXT,
         );
     } else if resp.hovered() {
-        p.rect_filled(rect, 7, Color32::from_white_alpha(8));
+        p.rect_filled(rect, r, theme::RAISED);
     }
 
     // Icon tile.
@@ -1534,15 +1562,17 @@ fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) ->
         egui::pos2(rect.left() + 22.0, rect.center().y),
         Vec2::splat(24.0),
     );
-    let ink = if selected { accent } else { theme::TEXT_DIM };
-    p.rect_filled(
+    let ink = if selected {
+        theme::TEXT
+    } else {
+        theme::TEXT_DIM
+    };
+    sheen::raised(
+        p,
         tile,
-        6,
-        if selected {
-            accent.gamma_multiply(0.2)
-        } else {
-            theme::RAISED
-        },
+        r,
+        if selected { theme::CAP } else { theme::RAISED },
+        theme::SHEEN,
     );
     let c = tile.center();
     let stroke = egui::Stroke::new(1.6, ink);
@@ -1966,7 +1996,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                 } else {
                     widgets::icons::CHEVRON_UP
                 };
-                ui.add(widgets::icon(arrow, 14.0, theme::DECK_A));
+                ui.add(widgets::icon(arrow, 14.0, theme::TEXT));
             }
             if resp.clicked() {
                 *clicked = Some(key);
@@ -2095,9 +2125,9 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                     let x1 = resp.rect.right();
                     painter.line_segment(
                         [egui::pos2(x0, y), egui::pos2(x1, y)],
-                        egui::Stroke::new(2.0, theme::DECK_A),
+                        egui::Stroke::new(2.0, theme::TEXT),
                     );
-                    painter.circle_filled(egui::pos2(x0 + 3.0, y), 3.5, theme::DECK_A);
+                    painter.circle_filled(egui::pos2(x0 + 3.0, y), 3.5, theme::TEXT);
                     if resp.ctx.input(|inp| inp.pointer.any_released()) {
                         egui::DragAndDrop::clear_payload(&resp.ctx);
                         // Index after the dragged row is taken out.
@@ -2248,22 +2278,18 @@ fn import_button(app: &mut DjApp, ui: &mut Ui) {
     ui.scope(|ui| {
         ui.spacing_mut().item_spacing.x = 1.0;
         let height = widgets::FIELD_HEIGHT;
-        let arrow = ui
-            .add(
-                egui::Button::image(widgets::icon(
-                    widgets::icons::CHEVRON_DOWN,
-                    16.0,
-                    theme::TEXT,
-                ))
-                .min_size(Vec2::new(24.0, height))
-                .corner_radius(egui::CornerRadius {
-                    nw: 0,
-                    sw: 0,
-                    ne: 6,
-                    se: 6,
-                }),
-            )
-            .on_hover_text("Import files or a folder");
+        let arrow = widgets::lit_button(
+            ui,
+            true,
+            false,
+            egui::Button::image(widgets::icon(
+                widgets::icons::CHEVRON_DOWN,
+                16.0,
+                theme::TEXT,
+            ))
+            .min_size(Vec2::new(24.0, height)),
+        )
+        .on_hover_text("Import files or a folder");
         egui::Popup::menu(&arrow)
             .align(egui::RectAlign::BOTTOM_END)
             .show(|ui| {
@@ -2278,18 +2304,13 @@ fn import_button(app: &mut DjApp, ui: &mut Ui) {
                     pick = Some(ImportPick::Folder);
                 }
             });
-        let main = ui
-            .add(
-                egui::Button::new("Import")
-                    .min_size(Vec2::new(0.0, height))
-                    .corner_radius(egui::CornerRadius {
-                        nw: 6,
-                        sw: 6,
-                        ne: 0,
-                        se: 0,
-                    }),
-            )
-            .on_hover_text("Import audio files");
+        let main = widgets::lit_button(
+            ui,
+            true,
+            false,
+            egui::Button::new("Import").min_size(Vec2::new(0.0, height)),
+        )
+        .on_hover_text("Import audio files");
         if main.clicked() {
             pick = Some(ImportPick::Files);
         }
@@ -2358,7 +2379,7 @@ fn status_bar(app: &mut DjApp, ui: &mut Ui) {
         if combo.response.clicked() {
             app.refresh_devices();
         }
-        if lost && ui.button("Reconnect").clicked() {
+        if lost && widgets::lit_button(ui, true, false, egui::Button::new("Reconnect")).clicked() {
             reconnect = true;
         }
         if let Some(out) = &app.audio.output {
@@ -2391,7 +2412,9 @@ fn status_bar(app: &mut DjApp, ui: &mut Ui) {
         };
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if ui.small_button("Shortcuts").clicked() {
+            if widgets::lit_button(ui, true, false, egui::Button::new("Shortcuts").small())
+                .clicked()
+            {
                 app.show_shortcuts = !app.show_shortcuts;
             }
             if let Some((msg, t)) = &app.notice {
@@ -2452,11 +2475,12 @@ pub fn drop_overlay(app: &DjApp, ctx: &egui::Context) {
         egui::Id::unique("drop-overlay"),
     ));
     let rect = ctx.content_rect().shrink(12.0);
-    painter.rect_filled(rect, 12.0, Color32::from_black_alpha(190));
+    let r = f32::from(theme::R_PANEL);
+    painter.rect_filled(rect, r, theme::OVERLAY);
     painter.rect_stroke(
         rect,
-        12.0,
-        egui::Stroke::new(2.0, theme::DECK_A),
+        r,
+        egui::Stroke::new(2.0, theme::TEXT_DIM),
         egui::StrokeKind::Inside,
     );
     let target = match app.view {

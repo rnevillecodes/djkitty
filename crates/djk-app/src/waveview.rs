@@ -425,6 +425,7 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    crate::layout_dump::record("lane", rect);
 
     if response.hovered() {
         let scroll = ui.input(|i| i.smooth_scroll_delta.y);
@@ -436,7 +437,7 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
     let window = *window_secs;
 
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 4.0, theme::BG);
+    crate::sheen::well(&painter, rect, f32::from(theme::R_CONTROL));
     let mid_y = rect.center().y;
     let half_h = rect.height() * 0.46;
     let width = rect.width().max(1.0);
@@ -571,7 +572,7 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
         [Pos2::new(cx, rect.top()), Pos2::new(cx, rect.bottom())],
         Stroke::new(2.0, theme::PLAYHEAD),
     );
-    // Deck letter, so stacked lanes are easy to tell apart.
+    // Deck letter: the lane's only deck colour, which tells the stacked lanes apart.
     painter.text(
         rect.left_top() + Vec2::new(8.0, 4.0),
         egui::Align2::LEFT_TOP,
@@ -579,15 +580,15 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
         egui::FontId::proportional(16.0),
         accent,
     );
-    painter.rect_stroke(
-        rect,
-        4.0,
-        Stroke::new(
-            if editing { 1.5 } else { 1.0 },
-            accent.gamma_multiply(if editing { 0.9 } else { 0.45 }),
-        ),
-        egui::StrokeKind::Inside,
-    );
+    // While its grid is being edited the lane is outlined in the deck colour (a state).
+    if editing {
+        painter.rect_stroke(
+            rect,
+            f32::from(theme::R_CONTROL),
+            Stroke::new(1.5, accent.gamma_multiply(0.9)),
+            egui::StrokeKind::Inside,
+        );
+    }
     if editing && response.hovered() {
         ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
     }
@@ -624,8 +625,9 @@ pub fn overview(
         Sense::hover()
     };
     let (rect, response) = ui.allocate_exact_size(size, sense);
+    crate::layout_dump::record("overview", rect);
     let painter = ui.painter_at(rect);
-    painter.rect_filled(rect, 3.0, theme::BG);
+    crate::sheen::well(&painter, rect, f32::from(theme::R_CONTROL));
     let mid_y = rect.center().y;
     let half_h = rect.height() * 0.46;
     if !cols_in.is_empty() {
