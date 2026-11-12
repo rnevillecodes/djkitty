@@ -14,7 +14,7 @@ fn fixture(name: &str) -> PathBuf {
 fn zero_crossings_left(samples: &[f32]) -> usize {
     let mut armed = false;
     let mut count = 0;
-    for f in samples.chunks_exact(2) {
+    for f in samples.as_chunks::<2>().0 {
         if f[0] < -0.02 {
             armed = true;
         } else if armed && f[0] > 0.02 {
@@ -60,7 +60,14 @@ fn mono_is_duplicated_to_stereo() {
     let d = decode_file(&fixture("mono.wav")).unwrap();
     assert_eq!(d.info.channels, 1);
     assert_eq!(d.buffer.frames(), 44_100);
-    assert!(d.buffer.samples.chunks_exact(2).all(|f| f[0] == f[1]));
+    assert!(
+        d.buffer
+            .samples
+            .as_chunks::<2>()
+            .0
+            .iter()
+            .all(|f| f[0] == f[1])
+    );
 }
 
 #[test]

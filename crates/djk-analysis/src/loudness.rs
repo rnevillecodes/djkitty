@@ -42,7 +42,7 @@ pub fn integrated_lufs(stereo: &[f32], rate: u32) -> Option<f32> {
     let mut steps = Vec::with_capacity(frames / step + 1);
     let mut acc = 0.0f64;
     let mut n = 0;
-    for frame in stereo.chunks_exact(2) {
+    for frame in stereo.as_chunks::<2>().0 {
         for (ch, &x) in frame.iter().enumerate() {
             let y = filters[ch].process(f64::from(x));
             acc += y * y;

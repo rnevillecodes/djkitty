@@ -403,7 +403,7 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
     let state = app.audio.state;
     let s = *state.deck(deck);
     let now = Instant::now();
-    let blink = (app.start_time.elapsed().as_millis() / 500) % 2 == 0;
+    let blink = (app.start_time.elapsed().as_millis() / 500).is_multiple_of(2);
     let rect = card(ui, |ui| {
         let full = ui.available_rect_before_wrap();
         let pitch_w = 58.0;

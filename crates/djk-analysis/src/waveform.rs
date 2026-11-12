@@ -43,7 +43,7 @@ impl Waveform {
         let mut bins = Vec::with_capacity(n_bins);
         let mut peaks = [0.0f32; 3];
         let mut next_edge = samples_per_bin;
-        for (i, f) in stereo.chunks_exact(2).enumerate() {
+        for (i, f) in stereo.as_chunks::<2>().0.iter().enumerate() {
             let x = 0.5 * (f[0] + f[1]);
             let l = low.process(x).abs();
             let m = mid_lp.process(mid_hp.process(x)).abs();
@@ -109,7 +109,7 @@ impl Waveform {
         let n = u32::from_le_bytes([header[7], header[8], header[9], header[10]]) as usize;
         let mut flat = vec![0u8; n * 3];
         r.read_exact(&mut flat)?;
-        let bins = flat.chunks_exact(3).map(|c| [c[0], c[1], c[2]]).collect();
+        let bins = flat.as_chunks::<3>().0.to_vec();
         Ok(Self { bins_per_sec, bins })
     }
 
