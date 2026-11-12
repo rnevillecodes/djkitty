@@ -56,7 +56,7 @@ pub const DECK_KEYS: &[(&str, &str, &str)] = &[
 pub const GLOBAL_KEYS: &[(&str, &str)] = &[
     ("Up / Down", "Move the track selection"),
     (
-        "Shift+Left / Shift+Right",
+        "Ctrl+Left / Ctrl+Right",
         "Load the selected track to deck A / B",
     ),
     ("Ctrl+F", "Search the library (or filter the open set)"),
@@ -104,10 +104,10 @@ pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
         if i.key_pressed(Key::ArrowUp) {
             ev.push(Ev::Select(-1));
         }
-        if i.modifiers.shift && i.key_pressed(Key::ArrowLeft) {
+        if i.modifiers.command && i.key_pressed(Key::ArrowLeft) {
             ev.push(Ev::Load(DeckId::A));
         }
-        if i.modifiers.shift && i.key_pressed(Key::ArrowRight) {
+        if i.modifiers.command && i.key_pressed(Key::ArrowRight) {
             ev.push(Ev::Load(DeckId::B));
         }
         if i.modifiers.command && i.key_pressed(Key::F) {

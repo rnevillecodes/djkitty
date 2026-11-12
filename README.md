@@ -22,7 +22,7 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 - **Sets:** create, rename and delete sets; add tracks; sort by any column (click **#** for the set order); drag tracks to reorder them; see
   track count and total duration.
 - **Two decks:** load by dragging a track from the list onto a deck, its waveform or that
-  side of the mixer (or with `Shift+←` / `Shift+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
+  side of the mixer (or with `Ctrl+←` / `Ctrl+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
   fader, jog nudge, elapsed/remaining time, and a **scrolling waveform** plus a
   whole-track overview (click to seek while paused).
 - **Beatgrids:** CDJ-style beat and bar markers on the waveforms (bar numbers, phrase
@@ -95,7 +95,7 @@ status bar to see this list in the app.
 | Keys | Action |
 |------|--------|
 | `↑` / `↓` | Move the track selection |
-| `Shift+←` / `Shift+→` | Load the selected track to deck A / B |
+| `Ctrl+←` / `Ctrl+→` | Load the selected track to deck A / B |
 | `Ctrl+F` | Search the library (or filter the open set) |
 | `Esc` | Clear the selection (hides the track details panel) |
 | `Del` | Remove the selected track from the open set, or from the library (asks first; files are never deleted) |

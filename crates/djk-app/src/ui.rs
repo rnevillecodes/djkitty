@@ -504,13 +504,9 @@ fn deck_main(
                         .truncate(),
                     );
                     let hint = match (deck, narrow) {
-                        (_, true) => "Drag a track here",
-                        (DeckId::A, false) => {
-                            "Drag a track here, or select one and press Shift+Left"
-                        }
-                        (DeckId::B, false) => {
-                            "Drag a track here, or select one and press Shift+Right"
-                        }
+                        (_, true) => "Drag and drop track",
+                        (DeckId::A, false) => "Drag and drop track or CTRL+Left in list",
+                        (DeckId::B, false) => "Drag and drop track or CTRL+Right in list",
                     };
                     let hint = egui::Label::new(RichText::new(hint).small().color(theme::TEXT_DIM));
                     // Wide decks have room for the hint to wrap; narrow ones keep one line.
@@ -1801,7 +1797,7 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
     );
     ui.add_space(10.0);
     ui.label(
-        RichText::new("Drag the track onto a deck to load it, or press Shift+Left / Shift+Right.")
+        RichText::new("Drag the track onto a deck to load it, or press Ctrl+Left / Ctrl+Right.")
             .small()
             .color(theme::TEXT_DIM),
     );
@@ -2138,7 +2134,7 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                     }
                 }
                 resp.context_menu(|ui| {
-                    for (deck, keys) in [(DeckId::A, "Shift+Left"), (DeckId::B, "Shift+Right")] {
+                    for (deck, keys) in [(DeckId::A, "Ctrl+Left"), (DeckId::B, "Ctrl+Right")] {
                         if ui
                             .add_enabled(
                                 !t.missing,
