@@ -636,3 +636,70 @@ fn hot_cues_round_trip_clear_and_go_with_the_track() {
     assert_eq!(lib.hot_cues(id).unwrap(), [None; 8]);
     assert!(lib.set_hot_cues(id, &cues).is_err(), "no such track");
 }
+
+#[test]
+fn a_removed_tracks_id_is_never_reused() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = library_with_titles(tmp.path());
+    let newest = *ids(&lib).iter().max().unwrap();
+    lib.remove_track(newest).unwrap();
+    let music = tmp.path().join("more");
+    copy("tone.mp3", &music.join("new.mp3"));
+    let s = lib.import_folder(&music, |_| {}).unwrap();
+    assert!(s.tracks[0] > newest, "{:?} reused {newest:?}", s.tracks[0]);
+}
+
+#[test]
+fn the_track_id_rebuild_keeps_everything_linked_to_tracks() {
+    let tmp = tempfile::tempdir().unwrap();
+    let (id, set) = {
+        let mut lib = library_with_titles(tmp.path());
+        let id = ids(&lib)[0];
+        let path = lib.track(id).unwrap().path;
+        lib.save_analysis(
+            id,
+            &record(1.0, Some(128.0), None),
+            Library::stamp(&path).unwrap(),
+        )
+        .unwrap();
+        let mut cues = [None; 8];
+        cues[3] = Some(7.5);
+        lib.set_hot_cues(id, &cues).unwrap();
+        let set = lib.create_set("Warm-up").unwrap();
+        lib.add_to_set(set, id).unwrap();
+        (id, set)
+    };
+    // Rewind to v6 so the v7 table rebuild runs again on a library holding data.
+    let db = rusqlite::Connection::open(tmp.path().join("data/library.db")).unwrap();
+    db.pragma_update(None, "user_version", 6).unwrap();
+    drop(db);
+
+    let lib = library(tmp.path());
+    assert_eq!(lib.schema_version().unwrap(), SCHEMA_VERSION);
+    assert_eq!(lib.analysis(id).unwrap().unwrap().bpm, Some(128.0));
+    assert_eq!(lib.hot_cues(id).unwrap()[3], Some(7.5));
+    assert_eq!(lib.sets_containing(id).unwrap(), 1);
+    assert!(lib.set_tracks(set).unwrap().iter().any(|t| t.id == id));
+}
+
+#[test]
+fn a_file_that_comes_back_is_no_longer_missing() {
+    let tmp = tempfile::tempdir().unwrap();
+    let music = tmp.path().join("music");
+    copy("tone.mp3", &music.join("a.mp3"));
+    let mut lib = library(tmp.path());
+    lib.import_folder(&music, |_| {}).unwrap();
+    let (id, path) = lib.tracks_needing_analysis().unwrap()[0].clone();
+    lib.save_analysis(id, &record(1.0, None, None), Library::stamp(&path).unwrap())
+        .unwrap();
+
+    // The drive goes away...
+    let away = tmp.path().join("away.mp3");
+    fs::rename(&path, &away).unwrap();
+    assert!(lib.tracks_needing_analysis().unwrap().is_empty());
+    assert!(lib.track(id).unwrap().missing);
+    // ...and comes back with the file unchanged.
+    fs::rename(&away, &path).unwrap();
+    assert!(lib.tracks_needing_analysis().unwrap().is_empty());
+    assert!(!lib.track(id).unwrap().missing);
+}

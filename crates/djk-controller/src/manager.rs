@@ -190,17 +190,18 @@ fn watch(
                 .collect::<Vec<_>>()
         });
 
-        if let Some((_, name)) = &conn {
-            let present = ports.as_ref().is_some_and(|p| p.contains(name));
-            if !present {
-                let (c, name) = conn.take().unwrap();
-                c.close();
-                *output.lock().unwrap() = None;
-                *status.lock().unwrap() = None;
-                tracing::info!("controller disconnected: {name}");
-                let _ = events.send(ControllerEvent::Disconnected);
-                notify();
-            }
+        // A failed scan (`ports` is `None`) says nothing about the controller: only a port
+        // list without it means it was unplugged.
+        if let (Some((_, name)), Some(ports)) = (&conn, &ports)
+            && !ports.contains(name)
+        {
+            let (c, name) = conn.take().unwrap();
+            c.close();
+            *output.lock().unwrap() = None;
+            *status.lock().unwrap() = None;
+            tracing::info!("controller disconnected: {name}");
+            let _ = events.send(ControllerEvent::Disconnected);
+            notify();
         }
 
         if conn.is_none()

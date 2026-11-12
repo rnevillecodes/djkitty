@@ -440,11 +440,14 @@ fn deck_main(
 ) {
     let accent = theme::deck_colour(deck);
     let width = ui.available_width();
-    let info = app.decks[deck.index()]
-        .track
-        .as_ref()
-        .filter(|_| s.loaded || app.decks[deck.index()].loading)
-        .cloned();
+    // The track the engine holds; on an empty deck, the one being loaded.
+    let d = &app.decks[deck.index()];
+    let info = if s.loaded {
+        d.track.as_ref()
+    } else {
+        d.pending.as_ref().and_then(|p| p.track.as_ref())
+    }
+    .cloned();
 
     // Header: deck badge, title/artist, and the BPM/key screen. Near the minimum window
     // size the screen narrows and the text truncates, so the header stays one row tall
@@ -583,7 +586,7 @@ fn deck_main(
     }
     ui.allocate_ui(Vec2::new(width, 16.0), |ui| {
         ui.set_height(16.0);
-        if d.loading {
+        if d.is_loading() {
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.label(RichText::new("Loading…").small());

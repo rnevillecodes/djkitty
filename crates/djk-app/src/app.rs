@@ -34,11 +34,11 @@ pub struct DeckUi {
     /// Whether the grid editing tools are open in this deck's waveform lane.
     pub grid_editing: bool,
     pub overview: Vec<WaveCol>,
-    pub loading: bool,
+    /// A track on its way to this deck. Everything above keeps describing the track the
+    /// engine holds until the engine reports it has taken this one.
+    pub pending: Option<PendingLoad>,
     pub message: Option<(String, Instant)>,
     pub cue_held: bool,
-    /// The loading track's saved hot cues (track seconds), sent with its load request.
-    pub pending_hot_cues: HotCues,
     /// The engine's hot cues (frames) as last seen for `token`, to spot changes to save.
     pub seen_hot_cues: Option<HotCues>,
     /// The beat length last sent to the engine for `token`.
@@ -49,6 +49,35 @@ pub struct DeckUi {
     pub pad_mode: PadMode,
     /// The on-screen hot cue pad held down with the mouse, if any.
     pub pad_held: Option<u8>,
+}
+
+impl DeckUi {
+    pub fn is_loading(&self) -> bool {
+        self.pending.is_some()
+    }
+}
+
+/// A track being decoded for a deck, then sent to the engine. It only becomes the deck's
+/// track (see [`DeckUi`]) once the engine holds it, so a refused load leaves the deck
+/// describing what it is really playing.
+pub struct PendingLoad {
+    pub token: u64,
+    pub track: Option<TrackRow>,
+    pub grid: Option<djk_library::StoredGrid>,
+    /// The track's saved hot cues (track seconds), sent with its load request.
+    pub hot_cues: HotCues,
+    /// Set once decoded and handed to the engine.
+    pub sent: Option<SentLoad>,
+}
+
+/// What a decoded track brings to its deck once the engine takes it.
+pub struct SentLoad {
+    waveform: Arc<Waveform>,
+    peaks: Arc<Peaks>,
+    overview: Vec<WaveCol>,
+    band_norm: [f32; 3],
+    /// The deck's refused-load count when this load was sent.
+    load_refusals: u32,
 }
 
 /// What the "Remove from library?" dialog is asking about.
@@ -423,16 +452,21 @@ impl DjApp {
         .unwrap_or(0)
     }
 
-    /// Clear all of a track's hot cues. A deck holding the track clears them in the engine
-    /// (whose slots are the source of truth while loaded, then saved as usual); the
-    /// library copy is cleared too, for when it isn't loaded.
+    /// Clear all of a track's hot cues. A deck holding the track (or loading it) clears
+    /// them in the engine (whose slots are the source of truth while loaded, then saved as
+    /// usual); the library copy is cleared too, for when it isn't loaded.
     pub fn clear_hot_cues(&mut self, id: TrackId) {
         let token = id.0 as u64;
         for deck in DeckId::ALL {
             let ui = &mut self.decks[deck.index()];
-            if ui.token == token {
-                ui.pending_hot_cues = [None; HOT_CUE_COUNT];
-                self.audio.send(Command::ClearHotCues(deck));
+            let mut holds = ui.token == token;
+            if let Some(p) = ui.pending.as_mut().filter(|p| p.token == token) {
+                p.hot_cues = [None; HOT_CUE_COUNT];
+                holds = true;
+            }
+            if holds {
+                // Ordered after any queued load, and ignored unless the deck holds `token`.
+                self.audio.send(Command::ClearHotCues { deck, token });
             }
         }
         self.with_library(|lib| lib.set_hot_cues(id, &[None; HOT_CUE_COUNT]));
@@ -577,23 +611,20 @@ impl DjApp {
     fn poll_analysis(&mut self) {
         let Some(pool) = &self.pool else { return };
         let mut changed = Vec::new();
-        let mut removed = 0;
+        let mut failed = 0;
         while let Some(ev) = pool.try_event() {
             match ev {
                 AnalysisEvent::Analysed(id) => changed.push(id),
-                AnalysisEvent::Removed(id, _) => {
-                    changed.push(id);
-                    removed += 1;
-                }
+                AnalysisEvent::Failed(..) => failed += 1,
             }
+        }
+        if failed > 0 {
+            self.notify(format!(
+                "{failed} file(s) could not be analysed (they stay in the library)"
+            ));
         }
         if changed.is_empty() {
             return;
-        }
-        if removed > 0 {
-            self.notify(format!(
-                "{removed} unreadable file(s) skipped and removed from the library"
-            ));
         }
         self.rows_dirty = true;
         self.reload_sets();
@@ -627,6 +658,16 @@ impl DjApp {
             self.deck_message(deck, "Deck is playing — pause it before loading");
             return;
         }
+        if self.decks[deck.index()]
+            .pending
+            .as_ref()
+            .is_some_and(|p| p.sent.is_some())
+        {
+            // The engine is taking the previous load (a block or two); replacing it now
+            // would leave the deck unsure which track it holds.
+            self.deck_message(deck, "Still loading — try again");
+            return;
+        }
         let Some(lib) = self.library.as_mut() else {
             return;
         };
@@ -647,15 +688,14 @@ impl DjApp {
         let hot_cues = lib.hot_cues(id).unwrap_or_default();
         let cache = lib.waveform_path(id);
         let ui = &mut self.decks[deck.index()];
-        ui.loading = true;
         ui.message = None;
-        ui.token = id.0 as u64;
-        ui.track = track;
-        ui.grid = grid;
-        ui.grid_editing = false;
-        ui.pending_hot_cues = hot_cues;
-        ui.seen_hot_cues = None;
-        ui.sent_beat_frames = None;
+        ui.pending = Some(PendingLoad {
+            token: id.0 as u64,
+            track,
+            grid,
+            hot_cues,
+            sent: None,
+        });
         self.loader.request(LoadJob {
             deck,
             path,
@@ -673,34 +713,88 @@ impl DjApp {
     fn receive_loads(&mut self) {
         while let Some(done) = self.loader.try_recv() {
             let deck = done.deck;
-            if self.decks[deck.index()].token != done.token {
+            let ui = &mut self.decks[deck.index()];
+            let Some(pending) = ui
+                .pending
+                .as_mut()
+                .filter(|p| p.token == done.token && p.sent.is_none())
+            else {
                 continue; // superseded by a later load request
-            }
-            self.decks[deck.index()].loading = false;
-            match done.result {
-                Ok((decoded, waveform, peaks)) => {
-                    if self.audio.state.deck(deck).playing {
-                        self.deck_message(deck, "Deck is playing — pause it before loading");
-                        continue;
-                    }
-                    let ui = &mut self.decks[deck.index()];
-                    ui.overview = crate::waveview::overview_cols(&peaks, &waveform, OVERVIEW_BINS);
-                    ui.band_norm = crate::waveview::band_norms(&waveform.bins);
-                    ui.waveform = Some(Arc::new(waveform));
-                    ui.peaks = Some(Arc::new(peaks));
-                    let rate = f64::from(decoded.buffer.sample_rate);
-                    let hot_cues = ui.pending_hot_cues.map(|c| c.map(|secs| secs * rate));
-                    if !self.audio.load(LoadRequest {
-                        deck,
-                        buffer: decoded.buffer,
-                        token: done.token,
-                        hot_cues,
-                    }) {
-                        self.deck_message(deck, "Engine busy — try again");
-                    }
+            };
+            let (decoded, waveform, peaks) = match done.result {
+                Ok(r) => r,
+                Err(e) => {
+                    ui.pending = None;
+                    self.deck_message(deck, format!("Could not load: {e}"));
+                    continue;
                 }
-                Err(e) => self.deck_message(deck, format!("Could not load: {e}")),
+            };
+            let state = *self.audio.state.deck(deck);
+            if state.playing {
+                ui.pending = None;
+                self.deck_message(deck, "Deck is playing — pause it before loading");
+                continue;
             }
+            let rate = f64::from(decoded.buffer.sample_rate);
+            let hot_cues = pending.hot_cues.map(|c| c.map(|secs| secs * rate));
+            let sent = SentLoad {
+                overview: crate::waveview::overview_cols(&peaks, &waveform, OVERVIEW_BINS),
+                band_norm: crate::waveview::band_norms(&waveform.bins),
+                waveform: Arc::new(waveform),
+                peaks: Arc::new(peaks),
+                load_refusals: state.load_refusals,
+            };
+            if self.audio.load(LoadRequest {
+                deck,
+                buffer: decoded.buffer,
+                token: done.token,
+                hot_cues,
+            }) {
+                // Becomes the deck's track in `settle_loads`, once the engine has it.
+                pending.sent = Some(sent);
+            } else {
+                ui.pending = None;
+                self.deck_message(deck, "Engine busy — try again");
+            }
+        }
+    }
+
+    /// Finish loads the engine has dealt with: take on the track it accepted, or drop
+    /// one it refused (the deck started playing before the load arrived).
+    fn settle_loads(&mut self) {
+        for deck in DeckId::ALL {
+            let s = *self.audio.state.deck(deck);
+            let ui = &mut self.decks[deck.index()];
+            let Some(pending) = &ui.pending else { continue };
+            let Some(sent) = &pending.sent else { continue };
+            if s.load_refusals != sent.load_refusals {
+                ui.pending = None;
+                self.deck_message(deck, "Deck is playing — pause it before loading");
+                continue;
+            }
+            if !s.loaded || s.track_token != pending.token {
+                continue; // not processed yet
+            }
+            let Some(PendingLoad {
+                token,
+                track,
+                grid,
+                sent: Some(sent),
+                ..
+            }) = ui.pending.take()
+            else {
+                continue;
+            };
+            ui.token = token;
+            ui.track = track;
+            ui.grid = grid;
+            ui.grid_editing = false;
+            ui.waveform = Some(sent.waveform);
+            ui.peaks = Some(sent.peaks);
+            ui.overview = sent.overview;
+            ui.band_norm = sent.band_norm;
+            ui.seen_hot_cues = None;
+            ui.sent_beat_frames = None;
         }
     }
 
@@ -781,8 +875,10 @@ impl DjApp {
                 ui.message = Some(("Needs a BPM to loop".into(), Instant::now()));
             }
             ui.seen_loop_refusals = Some(s.loop_refusals);
-            // Only act once the engine holds the track this deck's info is about.
-            if !s.loaded || s.track_token != ui.token || ui.loading {
+            // Only act once the engine holds the track this deck's info is about. (A load
+            // in flight doesn't stop this: until it lands, edits to the current track
+            // still need saving.)
+            if !s.loaded || s.track_token != ui.token {
                 continue;
             }
             let rate = f64::from(s.track_rate.max(1));
@@ -803,9 +899,23 @@ impl DjApp {
                 None => ui.seen_hot_cues = Some(s.hot_cues),
                 Some(seen) if seen != s.hot_cues => {
                     ui.seen_hot_cues = Some(s.hot_cues);
-                    let secs = s.hot_cues.map(|c| c.map(|f| f / rate));
                     let id = TrackId(ui.token as i64);
-                    self.with_library(|lib| lib.set_hot_cues(id, &secs));
+                    self.with_library(|lib| {
+                        // Write only the slots this deck changed, so another deck holding
+                        // the same track (with its own copy of the cues) can't undo edits
+                        // made there.
+                        let mut cues = lib.hot_cues(id)?;
+                        for (slot, (now, before)) in s.hot_cues.iter().zip(seen).enumerate() {
+                            if *now != before {
+                                cues[slot] = now.map(|f| f / rate);
+                            }
+                        }
+                        match lib.set_hot_cues(id, &cues) {
+                            // Removed from the library while loaded: nothing to keep.
+                            Err(djk_library::LibraryError::NotFound) => Ok(()),
+                            r => r,
+                        }
+                    });
                 }
                 Some(_) => {}
             }
@@ -854,6 +964,7 @@ impl eframe::App for DjApp {
         self.poll_import();
         self.poll_analysis();
         self.poll_controller();
+        self.settle_loads();
         self.sync_decks();
         if self.rows_dirty {
             self.reload_rows();

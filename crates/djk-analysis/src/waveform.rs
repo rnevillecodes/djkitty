@@ -3,6 +3,7 @@
 
 use std::io::{Read, Write};
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use crate::dsp::Biquad;
 
@@ -114,15 +115,25 @@ impl Waveform {
     }
 
     /// Write atomically (temp file + rename).
+    /// Write the cache file atomically. The loader and the analysis workers can save the
+    /// same track at once, so each save writes its own temporary file before renaming it
+    /// into place.
     pub fn save(&self, path: &Path) -> std::io::Result<()> {
-        let tmp = path.with_extension("wf.tmp");
-        {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let n = NEXT.fetch_add(1, Ordering::Relaxed);
+        let tmp = path.with_extension(format!("wf.{}-{n}.tmp", std::process::id()));
+        let result = (|| {
             let f = std::fs::File::create(&tmp)?;
             let mut w = std::io::BufWriter::new(f);
             self.write_to(&mut w)?;
             w.flush()?;
+            drop(w);
+            std::fs::rename(&tmp, path)
+        })();
+        if result.is_err() {
+            let _ = std::fs::remove_file(&tmp);
         }
-        std::fs::rename(&tmp, path)
+        result
     }
 
     pub fn load(path: &Path) -> std::io::Result<Self> {

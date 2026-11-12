@@ -81,18 +81,69 @@ const MIGRATIONS: &[&str] = &[
         UNIQUE (track_id, slot)
     );
     "#,
+    // v7: AUTOINCREMENT track ids, so a removed track's id is never given to a later
+    // import (the app keys decks, hot cue saves and analysis by id). SQLite can't add it
+    // in place, so the table is rebuilt; `migrate` turns foreign keys off around this so
+    // dropping the old table doesn't cascade into analysis, sets and hot cues.
+    r#"
+    CREATE TABLE tracks_new (
+        id                 INTEGER PRIMARY KEY AUTOINCREMENT,
+        path               TEXT NOT NULL UNIQUE,
+        title              TEXT NOT NULL,
+        artist             TEXT NOT NULL DEFAULT '',
+        size               INTEGER NOT NULL DEFAULT 0,
+        mtime              INTEGER NOT NULL DEFAULT 0,
+        missing            INTEGER NOT NULL DEFAULT 0,
+        added_at           INTEGER NOT NULL DEFAULT (unixepoch()),
+        user_grid_bpm      REAL,
+        user_grid_anchor   REAL,
+        user_grid_start    REAL,
+        user_grid_downbeat INTEGER
+    );
+    INSERT INTO tracks_new
+        (id, path, title, artist, size, mtime, missing, added_at,
+         user_grid_bpm, user_grid_anchor, user_grid_start, user_grid_downbeat)
+    SELECT id, path, title, artist, size, mtime, missing, added_at,
+           user_grid_bpm, user_grid_anchor, user_grid_start, user_grid_downbeat
+    FROM tracks;
+    DROP TABLE tracks;
+    ALTER TABLE tracks_new RENAME TO tracks;
+    "#,
 ];
 
 /// Apply any migrations newer than the database's `user_version`.
+///
+/// Foreign keys are off while migrating (the pragma can't change inside a transaction),
+/// so a migration can rebuild a referenced table; each one is checked before it commits.
 pub fn migrate(conn: &Connection) -> rusqlite::Result<()> {
     let current: i64 = conn.pragma_query_value(None, "user_version", |r| r.get(0))?;
-    for (i, sql) in MIGRATIONS.iter().enumerate().skip(current.max(0) as usize) {
-        let tx = conn.unchecked_transaction()?;
-        tx.execute_batch(sql)?;
-        tx.pragma_update(None, "user_version", (i + 1) as i64)?;
-        tx.commit()?;
+    if current >= LATEST {
+        return Ok(());
     }
-    Ok(())
+    let fk: bool = conn.pragma_query_value(None, "foreign_keys", |r| r.get(0))?;
+    conn.pragma_update(None, "foreign_keys", false)?;
+    let result = (|| {
+        for (i, sql) in MIGRATIONS.iter().enumerate().skip(current.max(0) as usize) {
+            let tx = conn.unchecked_transaction()?;
+            tx.execute_batch(sql)?;
+            let broken: i64 =
+                tx.query_row("SELECT COUNT(*) FROM pragma_foreign_key_check", [], |r| {
+                    r.get(0)
+                })?;
+            if broken > 0 {
+                // Rolls back when `tx` drops.
+                return Err(rusqlite::Error::SqliteFailure(
+                    rusqlite::ffi::Error::new(rusqlite::ffi::SQLITE_CONSTRAINT_FOREIGNKEY),
+                    Some(format!("migration {} broke {broken} foreign key(s)", i + 1)),
+                ));
+            }
+            tx.pragma_update(None, "user_version", (i + 1) as i64)?;
+            tx.commit()?;
+        }
+        Ok(())
+    })();
+    conn.pragma_update(None, "foreign_keys", fk)?;
+    result
 }
 
 pub const LATEST: i64 = MIGRATIONS.len() as i64;
