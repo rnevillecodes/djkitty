@@ -268,6 +268,7 @@ impl Engine {
                 self.decks[deck.index()].hot_cue_release(slot);
             }
             Command::ClearHotCue { deck, slot } => self.decks[deck.index()].clear_hot_cue(slot),
+            Command::ClearHotCues(deck) => self.decks[deck.index()].clear_hot_cues(),
             Command::SetBeatLength {
                 deck,
                 token,

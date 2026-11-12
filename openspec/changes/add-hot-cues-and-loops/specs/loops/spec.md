@@ -36,11 +36,19 @@ The system SHALL return to the loop start each time playback reaches the loop en
 - **THEN** the audio repeats evenly with no gaps, clicks or drift and the playhead never passes the loop end
 
 ### Requirement: Resize or exit a loop
-The system SHALL exit the active loop and continue playing past its end when the DJ presses the active loop length again. Pressing a different length SHALL resize the loop to that length, keeping the same loop start.
+The system SHALL exit the active loop and continue playing past its end when the DJ presses the active loop length again, or presses any loop pad with SHIFT held (on the controller) or right-clicks or Shift+clicks any on-screen loop pad. Pressing a different length without SHIFT SHALL resize the loop to that length, keeping the same loop start. With no active loop, the SHIFT, right-click and Shift+click presses SHALL do nothing.
 
 #### Scenario: Exit by pressing the active length
 - **WHEN** a 4-beat loop is active on deck A and the DJ presses the 4-beat pad again
 - **THEN** the loop ends and deck A plays on through the rest of the track
+
+#### Scenario: Exit with SHIFT
+- **WHEN** a 2-beat loop is active on deck B and the DJ holds SHIFT and presses pad 7 in Beat Loop mode
+- **THEN** the loop ends, deck B plays on, and no 16-beat loop starts
+
+#### Scenario: Exit on screen
+- **WHEN** a 1-beat loop is active on deck A and the DJ right-clicks any on-screen loop pad
+- **THEN** the loop ends and deck A plays on
 
 #### Scenario: Halve the loop
 - **WHEN** an 8-beat loop starting at 0:40 is active and the DJ presses the 4-beat pad

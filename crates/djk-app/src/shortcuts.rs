@@ -69,7 +69,11 @@ pub const GLOBAL_KEYS: &[(&str, &str)] = &[
 
 pub fn handle(app: &mut DjApp, ctx: &egui::Context) {
     // Never steal keys from a focused text field or an open dialog.
-    if ctx.egui_wants_keyboard_input() || app.new_set_dialog || app.remove_prompt.is_some() {
+    if ctx.egui_wants_keyboard_input()
+        || app.new_set_dialog
+        || app.remove_prompt.is_some()
+        || app.clear_cues_prompt.is_some()
+    {
         return;
     }
     let (events, dt) = ctx.input(|i| {

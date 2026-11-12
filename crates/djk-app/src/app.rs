@@ -8,7 +8,7 @@ use std::time::Instant;
 use djk_analysis::Waveform;
 use djk_analysis::waveform::OVERVIEW_BINS;
 use djk_controller::{Action, ControllerManager, DDJ_FLX2};
-use djk_core::{Command, DeckId, HotCues, LoadRequest, PadMode, TrackId};
+use djk_core::{Command, DeckId, HOT_CUE_COUNT, HotCues, LoadRequest, PadMode, TrackId};
 use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery, TrackRow};
 
 use crate::analysis::{AnalysisEvent, AnalysisPool};
@@ -59,6 +59,14 @@ pub struct RemovePrompt {
     pub sets: usize,
 }
 
+/// What the "Clear hot cues?" dialog is asking about.
+pub struct ClearCuesPrompt {
+    pub id: TrackId,
+    pub title: String,
+    /// Number of hot cues the track has (all of them go).
+    pub count: usize,
+}
+
 /// Which list the browser shows.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum View {
@@ -97,6 +105,7 @@ pub struct DjApp {
     pub new_set_dialog: bool,
     /// A pending "Remove from library?" confirmation.
     pub remove_prompt: Option<RemovePrompt>,
+    pub clear_cues_prompt: Option<ClearCuesPrompt>,
     pub import: Option<ImportJob>,
     pub notice: Option<(String, Instant)>,
     pub output_devices: Vec<String>,
@@ -173,6 +182,7 @@ impl DjApp {
             new_set_name: String::new(),
             new_set_dialog: false,
             remove_prompt: None,
+            clear_cues_prompt: None,
             import: None,
             notice: None,
             output_devices: Vec::new(),
@@ -384,6 +394,48 @@ impl DjApp {
         let title = lib.track(id).map(|t| t.title).unwrap_or_default();
         let sets = lib.sets_containing(id).unwrap_or(0);
         self.remove_prompt = Some(RemovePrompt { id, title, sets });
+    }
+
+    /// Ask to clear all of a track's hot cues (opens a confirmation dialog).
+    pub fn ask_clear_hot_cues(&mut self, id: TrackId) {
+        let Some(lib) = &self.library else { return };
+        let title = lib.track(id).map(|t| t.title).unwrap_or_default();
+        let count = self.hot_cue_count(id);
+        if count > 0 {
+            self.clear_cues_prompt = Some(ClearCuesPrompt { id, title, count });
+        }
+    }
+
+    /// How many hot cues a track has: the deck's live ones if it is loaded (they may be a
+    /// frame ahead of the library), otherwise the saved ones.
+    pub fn hot_cue_count(&self, id: TrackId) -> usize {
+        let token = id.0 as u64;
+
+        let live = DeckId::ALL
+            .into_iter()
+            .filter(|&d| self.decks[d.index()].token == token && self.audio.state.deck(d).loaded)
+            .map(|d| self.audio.state.deck(d).hot_cues.iter().flatten().count())
+            .max();
+        live.or_else(|| {
+            let lib = self.library.as_ref()?;
+            lib.hot_cues(id).ok().map(|c| c.iter().flatten().count())
+        })
+        .unwrap_or(0)
+    }
+
+    /// Clear all of a track's hot cues. A deck holding the track clears them in the engine
+    /// (whose slots are the source of truth while loaded, then saved as usual); the
+    /// library copy is cleared too, for when it isn't loaded.
+    pub fn clear_hot_cues(&mut self, id: TrackId) {
+        let token = id.0 as u64;
+        for deck in DeckId::ALL {
+            let ui = &mut self.decks[deck.index()];
+            if ui.token == token {
+                ui.pending_hot_cues = [None; HOT_CUE_COUNT];
+                self.audio.send(Command::ClearHotCues(deck));
+            }
+        }
+        self.with_library(|lib| lib.set_hot_cues(id, &[None; HOT_CUE_COUNT]));
     }
 
     /// Remove a track from the library (and every set). The file stays on disk.

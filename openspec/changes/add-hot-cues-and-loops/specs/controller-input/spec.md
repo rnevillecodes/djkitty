@@ -32,11 +32,15 @@ The system SHALL map a deck's eight pads in Hot Cue mode to that deck's hot cues
 - **THEN** the first press sets hot cue 5 and the second jumps back to it
 
 ### Requirement: DDJ-FLX2 pads in Beat Loop mode
-The system SHALL map a deck's eight pads in Beat Loop mode to that deck's loop lengths, from 1/4 beat on pad 1 to 32 beats on pad 8, to start, resize and exit loops.
+The system SHALL map a deck's eight pads in Beat Loop mode to that deck's loop lengths, from 1/4 beat on pad 1 to 32 beats on pad 8, to start, resize and exit loops. SHIFT + any pad in Beat Loop mode SHALL exit the active loop.
 
 #### Scenario: Loop from the pads
 - **WHEN** deck B is in Beat Loop mode and playing, and the DJ presses pad 5
 - **THEN** a 4-beat loop starts at deck B's playhead
+
+#### Scenario: SHIFT + pad exits the loop
+- **WHEN** a loop is active on deck B in Beat Loop mode and the DJ holds SHIFT and presses any pad
+- **THEN** the loop ends and no new loop starts
 
 ### Requirement: On-screen pads follow the controller mode
 The system SHALL switch a deck's on-screen pad row between Hot Cue and Loop to match that deck's pad mode on the controller, and changing the on-screen switch SHALL also change the controller's mode for that deck.

@@ -116,6 +116,8 @@ pub enum Command {
     HotCueRelease { deck: DeckId, slot: u8 },
     /// Empty a hot cue slot.
     ClearHotCue { deck: DeckId, slot: u8 },
+    /// Empty all of a deck's hot cue slots at once (the on-screen "Clear hot cues").
+    ClearHotCues(DeckId),
     /// Length of one beat of the track in `token`, in track frames (from its beatgrid),
     /// or 0 when it has no tempo (a plain `f64` keeps `Command` small). Ignored if the deck
     /// holds another track.

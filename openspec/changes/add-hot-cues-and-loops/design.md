@@ -70,6 +70,17 @@ For the reverse direction (on-screen switch → controller), the app writes the 
 
 A compact row of eight pads per deck sits under the transport, with a two-way Hot Cue / Loop switch beside it, built with the existing `widgets` look (lit ring = set or active). Right-click (or Shift+click) on a set hot cue pad clears it. A hot cue pad held with the mouse previews like the hardware: press sends `HotCuePress`, release sends `HotCueRelease`. Loop pads are disabled with a tooltip when the track has no BPM. When the controller rejects a loop for the same reason, the deck message ("Needs a BPM to loop") is shown, using the existing `DeckUi::message`.
 
+### 7. Clearing: SHIFT exits loops, clear-all goes through the engine
+
+SHIFT means "clear" in both pad modes. In Beat Loop mode SHIFT + any pad sends `ExitLoop(deck)`, and right-click or Shift+click on an on-screen loop pad does the same. With no active loop, `ExitLoop` already does nothing.
+
+Clearing all of a track's hot cues is on screen only: a "Clear hot cues…" item in a library row's menu, and \"Clear all hot cues…\" on right-clicking the deck's CUE switch (a context menu rather than a new button, so the deck's layout doesn't change). Both open a confirmation, since up to eight saved cues are lost at once and single cues are the only undo. Where the cues go depends on whether the track is loaded:
+
+- **Loaded on a deck:** send a new `ClearHotCues(deck)` command. The engine owns the slots (Decision 1), and the UI saves whatever the snapshot shows (Decision 2), so writing the library directly would be undone by the next snapshot diff. The empty slots then save through the normal path. If the track is loaded on both decks, both are cleared.
+- **Not loaded:** write an empty set with `set_hot_cues(id, [None; 8])`.
+
+*Alternative:* eight `ClearHotCue` commands. Rejected: one command is simpler to reason about and keeps the clear atomic within one audio block. `ClearHotCues(DeckId)` keeps `Command` within its 24-byte limit. The controller gets no clear-all, as no spare FLX2 control is safe from accidental presses.
+
 ## Risks / Trade-offs
 
 - [The FLX2's pad, SHIFT, BEAT SYNC and pad LED messages are unknown] → The first task records them with `--midi-monitor`. The mapping is data, so only the table changes. Decision 4 covers both mode models.

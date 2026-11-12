@@ -53,6 +53,25 @@ The system SHALL clear a set hot cue when the DJ presses it with SHIFT held on t
 - **WHEN** hot cue 3 on deck A is set and the DJ holds SHIFT and presses pad 3 in Hot Cue mode
 - **THEN** hot cue 3 becomes empty and deck A's playback is unchanged
 
+#### Scenario: Clear on screen
+- **WHEN** on-screen hot cue 2 on deck B is set and the DJ right-clicks it, or Shift+clicks it
+- **THEN** hot cue 2 becomes empty and deck B's playback is unchanged
+
+### Requirement: Clear all of a track's hot cues
+The system SHALL let the DJ clear all of a track's hot cues at once on screen, from the track's menu in the library or by right-clicking the CUE switch of the deck it is loaded on, after the DJ confirms. It SHALL work whether or not the track is loaded, SHALL save the cleared state, and SHALL NOT change playback. The controller SHALL have no clear-all action.
+
+#### Scenario: Clear all on a loaded deck
+- **WHEN** deck A is playing a track with hot cues 1, 2 and 5 set, and the DJ chooses to clear all hot cues and confirms
+- **THEN** all eight of deck A's slots become empty, deck A keeps playing, and the track has no hot cues when loaded again
+
+#### Scenario: Clear all from the library
+- **WHEN** a track that is not loaded has saved hot cues and the DJ chooses to clear its hot cues from its library menu and confirms
+- **THEN** the track has no hot cues the next time it is loaded
+
+#### Scenario: Cancelled
+- **WHEN** the DJ chooses to clear all hot cues and then cancels the confirmation
+- **THEN** every hot cue is kept
+
 ### Requirement: Hot cues are kept with the track
 The system SHALL save each track's hot cues in the library when they are set or cleared, and SHALL restore them whenever the track is loaded onto either deck, including after the app restarts.
 

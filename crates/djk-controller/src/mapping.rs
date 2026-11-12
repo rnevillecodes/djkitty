@@ -394,6 +394,8 @@ fn pad_action(
         (PadMode::HotCue, true, true) => Command::ClearHotCue { deck, slot },
         (PadMode::HotCue, true, false) => Command::HotCuePress { deck, slot },
         (PadMode::HotCue, false, _) => Command::HotCueRelease { deck, slot },
+        // SHIFT means "clear" in both modes: here it exits the active loop.
+        (PadMode::BeatLoop, true, true) => Command::ExitLoop(deck),
         (PadMode::BeatLoop, true, false) => Command::BeatLoop {
             deck,
             beats: *LOOP_BEATS.get(usize::from(slot))?,
@@ -726,6 +728,22 @@ mod tests {
         );
         assert_eq!(
             t.translate(&[0x99, 0x64, 0x00]),
+            None,
+            "release does nothing"
+        );
+        // SHIFT + pad exits the loop (SHIFT's own note, 8 higher, or SHIFT held) and
+        // never starts one.
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x6E, 0x7F])),
+            Command::ExitLoop(DB)
+        );
+        t.translate(&[0x91, SHIFT_A, 0x7F]);
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x66, 0x7F])),
+            Command::ExitLoop(DB)
+        );
+        assert_eq!(
+            t.translate(&[0x99, 0x66, 0x00]),
             None,
             "release does nothing"
         );

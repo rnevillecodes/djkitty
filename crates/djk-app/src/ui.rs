@@ -98,6 +98,9 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     if app.remove_prompt.is_some() {
         remove_dialog(app, ui.ctx());
     }
+    if app.clear_cues_prompt.is_some() {
+        clear_cues_dialog(app, ui.ctx());
+    }
 }
 
 // ---------------------------------------------------------------- decks + mixer
@@ -818,6 +821,11 @@ fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
                 (PadMode::BeatLoop, "LOOP", "Pads start beat loops"),
             ] {
                 let on = mode == m;
+                let extra = if m == PadMode::HotCue && s.loaded {
+                    " · right-click to clear all hot cues"
+                } else {
+                    ""
+                };
                 let b = widgets::lit_button_sized(
                     ui,
                     Vec2::new(38.0, PAD_HEIGHT),
@@ -829,8 +837,22 @@ fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
                     })),
                 )
                 .on_hover_text(format!(
-                    "{tip} (on the DDJ-FLX2: SHIFT + BEAT SYNC, then a pad)"
+                    "{tip} (on the DDJ-FLX2: SHIFT + BEAT SYNC, then a pad){extra}"
                 ));
+                // Right-click CUE to clear all of the track's hot cues (after asking).
+                if m == PadMode::HotCue && s.loaded {
+                    let id = djk_core::TrackId(app.decks[deck.index()].token as i64);
+                    let has_cues = s.hot_cues.iter().any(Option::is_some);
+                    b.context_menu(|ui| {
+                        if ui
+                            .add_enabled(has_cues, egui::Button::new("Clear all hot cues…"))
+                            .clicked()
+                        {
+                            app.ask_clear_hot_cues(id);
+                            ui.close();
+                        }
+                    });
+                }
                 if b.clicked() {
                     app.set_pad_mode(deck, m);
                 }
@@ -905,7 +927,13 @@ fn loop_pad(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState, slot: u8,
     let enabled = s.loaded && s.beat_frames.is_some();
     let label = beats_label(beats);
     let resp = widgets::pad(ui, size, &label, theme::LOOP, active, enabled);
-    if resp.clicked() {
+    // Right-click or Shift+click exits the loop, as SHIFT + pad does on the controller.
+    let shift = ui.input(|i| i.modifiers.shift);
+    if resp.secondary_clicked() || (resp.clicked() && shift) {
+        if s.active_loop.is_some() {
+            app.audio.send(Command::ExitLoop(deck));
+        }
+    } else if resp.clicked() {
         app.audio.send(Command::BeatLoop { deck, beats });
     }
     let unit = if beats > 1.0 { "beats" } else { "beat" };
@@ -915,7 +943,9 @@ fn loop_pad(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState, slot: u8,
     } else if active {
         resp.on_hover_text(format!("Exit the {label}-{unit} loop"));
     } else if s.active_loop.is_some() {
-        resp.on_hover_text(format!("Make the loop {label} {unit} long"));
+        resp.on_hover_text(format!(
+            "Make the loop {label} {unit} long · right-click or Shift+click to exit the loop"
+        ));
     } else {
         resp.on_hover_text(format!("Loop {label} {unit} from the playhead"));
     }
@@ -1502,6 +1532,58 @@ fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
     }
 }
 
+/// "Clear hot cues?" confirmation: up to eight saved cues go at once.
+fn clear_cues_dialog(app: &mut DjApp, ctx: &egui::Context) {
+    let Some(prompt) = &app.clear_cues_prompt else {
+        return;
+    };
+    let (id, title, count) = (prompt.id, prompt.title.clone(), prompt.count);
+    let mut clear = false;
+    let mut close = false;
+    let modal = egui::Modal::new(egui::Id::unique("clear_cues_dialog")).show(ctx, |ui| {
+        ui.set_width(360.0);
+        ui.label(RichText::new("Clear hot cues?").size(18.0).strong());
+        ui.add_space(6.0);
+        let what = if count == 1 {
+            "Its hot cue".to_string()
+        } else {
+            format!("All {count} of its hot cues")
+        };
+        ui.label(format!("{what} will be cleared from “{title}”."));
+        ui.add_space(4.0);
+        ui.label(
+            RichText::new("This can't be undone. Playback isn't affected.")
+                .small()
+                .color(theme::TEXT_DIM),
+        );
+        ui.add_space(12.0);
+        ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+            let confirm = egui::Button::new(RichText::new("Clear").strong())
+                .fill(theme::DANGER.gamma_multiply(0.45))
+                .min_size(Vec2::new(90.0, 28.0));
+            if ui.add(confirm).clicked() {
+                clear = true;
+            }
+            let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
+            if widgets::lit_button(ui, true, false, cancel).clicked() {
+                close = true;
+            }
+        });
+        if ui.input(|i| i.key_pressed(egui::Key::Enter)) {
+            clear = true;
+        }
+    });
+    if modal.should_close() {
+        close = true;
+    }
+    if clear {
+        app.clear_cues_prompt = None;
+        app.clear_hot_cues(id);
+    } else if close {
+        app.clear_cues_prompt = None;
+    }
+}
+
 /// Spaced-out caps heading for a panel section (SETS, TRACK DETAILS, LOCATION).
 fn section_heading(ui: &mut Ui, text: &str) {
     ui.label(
@@ -1915,6 +1997,7 @@ enum RowAction {
     AddToSet(djk_library::SetId, usize),
     RemoveFromSet(usize),
     RemoveFromLibrary(usize),
+    ClearHotCues(usize),
     Move(usize, usize),
 }
 
@@ -2163,6 +2246,16 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                         }
                     });
                     ui.separator();
+                    let has_cues = app.hot_cue_count(t.id) > 0;
+                    if ui
+                        .add_enabled(has_cues, egui::Button::new("Clear hot cues…"))
+                        .on_hover_text("Clears all of this track's hot cues, after asking")
+                        .clicked()
+                    {
+                        action = Some(RowAction::ClearHotCues(i));
+                        ui.close();
+                    }
+                    ui.separator();
                     // Neither option touches the audio file on disk.
                     if in_set
                         && ui
@@ -2243,6 +2336,10 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
             });
         }
         Some(RowAction::RemoveFromSet(i)) => app.remove_from_open_set(i),
+        Some(RowAction::ClearHotCues(i)) => {
+            let id = app.rows[i].id;
+            app.ask_clear_hot_cues(id);
+        }
         Some(RowAction::RemoveFromLibrary(i)) => {
             let id = app.rows[i].id;
             app.ask_remove_from_library(id);

@@ -38,6 +38,13 @@
 
 - [ ] 7.1 On the DDJ-FLX2, set hot cues on a real track, mix into it using hot cues, switch the pads to Beat Loop with SHIFT + BEAT SYNC, loop a 4-beat section, halve it to 2 and 1, then exit. Verify there are no clicks at the loop wrap, LEDs are correct throughout, the overrun counter stays at 0, neither deck's tempo changes from BEAT SYNC, and the hot cues are still there after a restart
 
+## 8. Clearing hot cues and loops
+
+- [x] 8.1 Make SHIFT + any pad in Beat Loop mode send `ExitLoop` in `pad_action`, and right-click or Shift+click on an on-screen loop pad send `ExitLoop`, with the tooltip saying so (design Decision 7). Verify with a mapping unit test that SHIFT + pad 7 in Beat Loop mode yields `ExitLoop` and never `BeatLoop`, and on screen that right-clicking a loop pad during a loop ends it
+- [x] 8.2 Add `ClearHotCues(DeckId)` to `Command` and implement it in `Deck` (all slots empty, playback unchanged, nothing with no track). Verify with a deck unit test, that the `Command` size test still passes, and that `no_alloc` still passes
+- [x] 8.3 Add "Clear hot cues…" to the library row menu (enabled when the track has hot cues) and \"Clear all hot cues…\" to the context menu of the deck's CUE switch (keeping the deck layout unchanged), both opening a confirmation dialog. On confirm, send `ClearHotCues` to every deck the track is loaded on, or call `set_hot_cues(id, [None; 8])` when it isn't loaded (design Decision 7). Verify each `hot-cues` "Clear all" scenario, including Cancelled, and that a loaded track's cues stay cleared after reloading it
+- [x] 8.4 Update the README hot cue and loop bullet with clearing. Verify the README matches the built behaviour
+
 ## Workflow follow-up
 
 - Archive `add-v0-1-walking-skeleton` before archiving this change, so the `controller-input` MODIFIED requirement has a main spec to apply to.

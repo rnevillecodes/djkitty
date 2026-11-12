@@ -213,6 +213,11 @@ impl Deck {
         }
     }
 
+    /// Empty every hot cue slot. Playback is unchanged.
+    pub fn clear_hot_cues(&mut self) {
+        self.hot_cues = [None; djk_core::HOT_CUE_COUNT];
+    }
+
     /// Set the length of one beat for the track `token` (ignored for any other track).
     pub fn set_beat_length(&mut self, token: u64, frames: Option<f64>) {
         if token == self.token {
@@ -690,6 +695,22 @@ mod tests {
         deck.clear_hot_cue(2);
         let s = deck.state();
         assert_eq!(s.hot_cues[2], None);
+        assert!(s.playing);
+        assert_eq!(s.position, 10_000.0);
+    }
+
+    #[test]
+    fn clear_all_hot_cues_keeps_playback() {
+        let mut deck = loaded_deck();
+        for (slot, at) in [(0, 1_000.0), (3, 2_000.0), (7, 10_000.0)] {
+            deck.seek(at);
+            deck.hot_cue_press(slot);
+            deck.hot_cue_release(slot);
+        }
+        deck.play();
+        deck.clear_hot_cues();
+        let s = deck.state();
+        assert!(s.hot_cues.iter().all(Option::is_none));
         assert!(s.playing);
         assert_eq!(s.position, 10_000.0);
     }
