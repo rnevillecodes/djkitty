@@ -1,0 +1,65 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 680 256" role="img" aria-labelledby="title">
+  <title id="title">DJKitty</title>
+  <defs>
+    <linearGradient id="dj" gradientUnits="userSpaceOnUse" x1="300" x2="430" y1="0" y2="0">
+      <stop offset="0" stop-color="#3fb6ff"/>
+      <stop offset="1" stop-color="#ff8a3d"/>
+    </linearGradient>
+  </defs>
+  <g>
+    <!-- Tile, in the app's panel colour. -->
+    <rect width="256" height="256" rx="56" fill="#191c22"/>
+  
+    <!-- Headphone band, behind the ears. -->
+    <path d="M46 140 C46 18 210 18 210 140" fill="none" stroke="#5a616e" stroke-width="12" stroke-linecap="round"/>
+  
+    <!-- Head and ears. -->
+    <g fill="#e6e8ec">
+      <path d="M58 118 L66 40 Q68 34 74 38 L122 82 Z"/>
+      <path d="M198 118 L190 40 Q188 34 182 38 L134 82 Z"/>
+      <ellipse cx="128" cy="148" rx="78" ry="68"/>
+    </g>
+    <!-- Inner ears. -->
+    <g fill="#c4c9d2">
+      <path d="M72 96 L76 56 L104 82 Z"/>
+      <path d="M184 96 L180 56 L152 82 Z"/>
+    </g>
+  
+    <!-- Ear cups: deck A blue on the left, deck B orange on the right. -->
+    <rect x="30" y="124" width="32" height="58" rx="12" fill="#3fb6ff"/>
+    <rect x="194" y="124" width="32" height="58" rx="12" fill="#ff8a3d"/>
+    <rect x="38" y="134" width="6" height="38" rx="3" fill="#ffffff" fill-opacity="0.35"/>
+    <rect x="202" y="134" width="6" height="38" rx="3" fill="#ffffff" fill-opacity="0.35"/>
+  
+    <!-- Eyes: two spinning records with deck-coloured labels. -->
+    <g>
+      <circle cx="100" cy="140" r="16" fill="#121418"/>
+      <circle cx="100" cy="140" r="11" fill="none" stroke="#3a3f4a" stroke-width="1.5"/>
+      <circle cx="100" cy="140" r="5.5" fill="#3fb6ff"/>
+      <circle cx="100" cy="140" r="1.6" fill="#121418"/>
+      <circle cx="156" cy="140" r="16" fill="#121418"/>
+      <circle cx="156" cy="140" r="11" fill="none" stroke="#3a3f4a" stroke-width="1.5"/>
+      <circle cx="156" cy="140" r="5.5" fill="#ff8a3d"/>
+      <circle cx="156" cy="140" r="1.6" fill="#121418"/>
+    </g>
+  
+    <!-- Nose and mouth. -->
+    <path d="M120 166 H136 Q138 166 136.5 168 L129.5 175 Q128 176.5 126.5 175 L119.5 168 Q118 166 120 166 Z" fill="#ff8fa3"/>
+    <path d="M128 176 V181 Q121 189 113 182 M128 181 Q135 189 143 182" fill="none" stroke="#121418" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  
+    <!-- Whiskers as little waveforms. -->
+    <g fill="#8b929e">
+      <rect x="72" y="172" width="4" height="8" rx="2"/>
+      <rect x="79" y="166" width="4" height="20" rx="2"/>
+      <rect x="86" y="169" width="4" height="14" rx="2"/>
+      <rect x="93" y="173" width="4" height="6" rx="2"/>
+      <rect x="159" y="173" width="4" height="6" rx="2"/>
+      <rect x="166" y="169" width="4" height="14" rx="2"/>
+      <rect x="173" y="166" width="4" height="20" rx="2"/>
+      <rect x="180" y="172" width="4" height="8" rx="2"/>
+    </g>
+  </g>
+  <text x="290" y="166" font-family="'Segoe UI', 'Inter', 'Helvetica Neue', Arial, sans-serif" font-size="112" letter-spacing="-2">
+    <tspan fill="url(#dj)" font-weight="800">DJ</tspan><tspan fill="#191c22" font-weight="600">Kitty</tspan>
+  </text>
+</svg>

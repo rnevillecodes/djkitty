@@ -1,0 +1,46 @@
+[workspace]
+resolver = "3"
+members = ["crates/*"]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/rnevillecodes/djkitty"
+rust-version = "1.85"
+
+[workspace.dependencies]
+djk-core = { path = "crates/djk-core" }
+djk-audio = { path = "crates/djk-audio" }
+djk-analysis = { path = "crates/djk-analysis" }
+djk-library = { path = "crates/djk-library" }
+djk-controller = { path = "crates/djk-controller" }
+
+anyhow = "1.0"
+thiserror = "2.0"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+cpal = "0.18"
+midir = "0.11"
+rtrb = "0.4"
+triple_buffer = "9.0"
+symphonia = { version = "0.6", features = ["all"] }
+rustfft = "6.4"
+rusqlite = { version = "0.41", features = ["bundled"] }
+lofty = "0.25"
+walkdir = "2.5"
+directories = "6.0"
+num_cpus = "1.17"
+eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
+egui = "0.37"
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
+resvg = { version = "0.45", default-features = false }
+rfd = "0.18"
+tempfile = "3"
+hound = "3.5"
+
+[profile.dev.package."*"]
+opt-level = 2
+
+[profile.release]
+lto = "thin"
