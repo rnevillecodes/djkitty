@@ -52,17 +52,66 @@ fn main() -> anyhow::Result<()> {
         )
         .init();
 
+    let mut viewport = egui::ViewportBuilder::default()
+        .with_title("DJKitty")
+        .with_inner_size([1280.0, 760.0])
+        .with_min_inner_size([960.0, 600.0]);
+    if let Some(icon) = window_icon() {
+        viewport = viewport.with_icon(icon);
+    }
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default()
-            .with_title("djkitty")
-            .with_inner_size([1280.0, 760.0])
-            .with_min_inner_size([960.0, 600.0]),
+        viewport,
         ..Default::default()
     };
+    // The app id names the settings folder, so it stays lowercase.
     eframe::run_native(
         "djkitty",
         options,
         Box::new(|cc| Ok(Box::new(app::DjApp::new(cc)))),
     )
     .map_err(|e| anyhow::anyhow!("{e}"))
+}
+
+/// The logo, rasterised for the window and taskbar icon.
+fn window_icon() -> Option<egui::IconData> {
+    const SIZE: u32 = 256;
+    let tree = resvg::usvg::Tree::from_data(
+        include_bytes!("../assets/logo.svg"),
+        &resvg::usvg::Options::default(),
+    )
+    .ok()?;
+    let mut pixmap = resvg::tiny_skia::Pixmap::new(SIZE, SIZE)?;
+    let scale = SIZE as f32 / tree.size().width().max(tree.size().height());
+    resvg::render(
+        &tree,
+        resvg::tiny_skia::Transform::from_scale(scale, scale),
+        &mut pixmap.as_mut(),
+    );
+    // tiny-skia stores premultiplied alpha; the window icon wants straight alpha.
+    let rgba = pixmap
+        .pixels()
+        .iter()
+        .flat_map(|p| {
+            let c = p.demultiply();
+            [c.red(), c.green(), c.blue(), c.alpha()]
+        })
+        .collect();
+    Some(egui::IconData {
+        rgba,
+        width: SIZE,
+        height: SIZE,
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn window_icon_renders_the_logo() {
+        let icon = super::window_icon().expect("logo.svg rasterises");
+        assert_eq!(icon.rgba.len(), 256 * 256 * 4);
+        // The centre of the tile is the cat's (opaque, light) face.
+        let i = (128 * 256 + 128) * 4;
+        assert_eq!(icon.rgba[i + 3], 255);
+        assert!(icon.rgba[i] > 200, "{:?}", &icon.rgba[i..i + 4]);
+    }
 }

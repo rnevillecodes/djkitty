@@ -1,4 +1,9 @@
-# djkitty
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="crates/djk-app/assets/logo-wordmark.svg">
+    <img src="crates/djk-app/assets/logo-wordmark-light.svg" alt="DJKitty" width="420">
+  </picture>
+</h1>
 
 **The DJ app that grows with you.** An open-source DJ application written in Rust: simple
 enough to learn on, built to grow into a full replacement for commercial DJ software.

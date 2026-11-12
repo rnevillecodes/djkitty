@@ -2115,6 +2115,15 @@ fn status_bar(app: &mut DjApp, ui: &mut Ui) {
     let mut reconnect = false;
     let mut pick: Option<Option<String>> = None;
     ui.horizontal(|ui| {
+        ui.add(egui::Image::new(widgets::icons::LOGO).fit_to_exact_size(Vec2::splat(18.0)))
+            .on_hover_text("DJKitty");
+        ui.label(
+            RichText::new("DJKitty")
+                .size(12.0)
+                .strong()
+                .color(theme::HEADING),
+        );
+        ui.separator();
         // Audio device picker.
         let current = app.audio.output.as_ref().map(|o| o.device_name.clone());
         let lost = app.audio.is_disconnected();

@@ -854,6 +854,7 @@ dependencies = [
  "egui_extras",
  "midir",
  "num_cpus",
+ "resvg",
  "rfd",
  "rtrb",
  "tempfile",
