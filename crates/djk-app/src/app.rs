@@ -8,7 +8,7 @@ use std::time::Instant;
 use djk_analysis::Waveform;
 use djk_analysis::waveform::OVERVIEW_BINS;
 use djk_controller::{Action, ControllerManager, DDJ_FLX2};
-use djk_core::{DeckId, LoadRequest, TrackId};
+use djk_core::{Command, DeckId, HotCues, LoadRequest, PadMode, TrackId};
 use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery, TrackRow};
 
 use crate::analysis::{AnalysisEvent, AnalysisPool};
@@ -37,6 +37,18 @@ pub struct DeckUi {
     pub loading: bool,
     pub message: Option<(String, Instant)>,
     pub cue_held: bool,
+    /// The loading track's saved hot cues (track seconds), sent with its load request.
+    pub pending_hot_cues: HotCues,
+    /// The engine's hot cues (frames) as last seen for `token`, to spot changes to save.
+    pub seen_hot_cues: Option<HotCues>,
+    /// The beat length last sent to the engine for `token`.
+    pub sent_beat_frames: Option<Option<f64>>,
+    /// The engine's refused-loop count as last seen.
+    pub seen_loop_refusals: Option<u32>,
+    /// What the on-screen pads (and the controller's pads) do for this deck.
+    pub pad_mode: PadMode,
+    /// The on-screen hot cue pad held down with the mouse, if any.
+    pub pad_held: Option<u8>,
 }
 
 /// What the "Remove from library?" dialog is asking about.
@@ -580,6 +592,7 @@ impl DjApp {
         };
         let track = lib.track(id).ok();
         let grid = lib.beatgrid(id).ok().flatten();
+        let hot_cues = lib.hot_cues(id).unwrap_or_default();
         let cache = lib.waveform_path(id);
         let ui = &mut self.decks[deck.index()];
         ui.loading = true;
@@ -588,6 +601,9 @@ impl DjApp {
         ui.track = track;
         ui.grid = grid;
         ui.grid_editing = false;
+        ui.pending_hot_cues = hot_cues;
+        ui.seen_hot_cues = None;
+        ui.sent_beat_frames = None;
         self.loader.request(LoadJob {
             deck,
             path,
@@ -620,10 +636,13 @@ impl DjApp {
                     ui.band_norm = crate::waveview::band_norms(&waveform.bins);
                     ui.waveform = Some(Arc::new(waveform));
                     ui.peaks = Some(Arc::new(peaks));
+                    let rate = f64::from(decoded.buffer.sample_rate);
+                    let hot_cues = ui.pending_hot_cues.map(|c| c.map(|secs| secs * rate));
                     if !self.audio.load(LoadRequest {
                         deck,
                         buffer: decoded.buffer,
                         token: done.token,
+                        hot_cues,
                     }) {
                         self.deck_message(deck, "Engine busy — try again");
                     }
@@ -661,6 +680,19 @@ impl DjApp {
                 Action::Engine(_) => {}
             }
         }
+        // The controller may have switched a deck's pads (SHIFT + BEAT SYNC); mirror it.
+        if let Some(c) = &self.controller {
+            for deck in DeckId::ALL {
+                let mode = c.values.pad_mode(deck);
+                let d = &mut self.decks[deck.index()];
+                if d.pad_mode != mode {
+                    if let Some(slot) = d.pad_held.take() {
+                        self.audio.send(Command::HotCueRelease { deck, slot });
+                    }
+                    self.decks[deck.index()].pad_mode = mode;
+                }
+            }
+        }
         let time = self.start_time.elapsed().as_secs_f64();
         let state = self.audio.state;
         if let Some(c) = self.controller.as_mut() {
@@ -682,6 +714,63 @@ impl DjApp {
         } as usize;
         self.selected = Some(next);
         self.scroll_to_selected = true;
+    }
+
+    /// Keep each deck's engine-side extras in step with the app: send the beat length
+    /// when the track's tempo is known or changes, save hot cues when they change (from
+    /// the pads or the screen), and explain refused loops.
+    fn sync_decks(&mut self) {
+        for deck in DeckId::ALL {
+            let s = *self.audio.state.deck(deck);
+            let ui = &mut self.decks[deck.index()];
+            if let Some(seen) = ui.seen_loop_refusals
+                && s.loop_refusals != seen
+            {
+                ui.message = Some(("Needs a BPM to loop".into(), Instant::now()));
+            }
+            ui.seen_loop_refusals = Some(s.loop_refusals);
+            // Only act once the engine holds the track this deck's info is about.
+            if !s.loaded || s.track_token != ui.token || ui.loading {
+                continue;
+            }
+            let rate = f64::from(s.track_rate.max(1));
+            let beat = ui
+                .grid
+                .map(|g| g.grid.bpm)
+                .filter(|bpm| *bpm > 0.0)
+                .map(|bpm| 60.0 / bpm * rate);
+            if ui.sent_beat_frames != Some(beat) {
+                ui.sent_beat_frames = Some(beat);
+                self.audio.send(Command::SetBeatLength {
+                    deck,
+                    token: ui.token,
+                    frames: beat.unwrap_or(0.0),
+                });
+            }
+            match ui.seen_hot_cues {
+                None => ui.seen_hot_cues = Some(s.hot_cues),
+                Some(seen) if seen != s.hot_cues => {
+                    ui.seen_hot_cues = Some(s.hot_cues);
+                    let secs = s.hot_cues.map(|c| c.map(|f| f / rate));
+                    let id = TrackId(ui.token as i64);
+                    self.with_library(|lib| lib.set_hot_cues(id, &secs));
+                }
+                Some(_) => {}
+            }
+        }
+    }
+
+    /// Switch what a deck's pads do, on screen and on the controller.
+    pub fn set_pad_mode(&mut self, deck: DeckId, mode: PadMode) {
+        let d = &mut self.decks[deck.index()];
+        if let Some(slot) = d.pad_held.take() {
+            self.audio.send(Command::HotCueRelease { deck, slot });
+        }
+        self.decks[deck.index()].pad_mode = mode;
+        if let Some(c) = &self.controller {
+            c.values.set_pad_mode(deck, mode);
+            c.values.set_selecting(deck, false);
+        }
     }
 
     /// Tell soft takeover that the UI changed a fader.
@@ -713,6 +802,7 @@ impl eframe::App for DjApp {
         self.poll_import();
         self.poll_analysis();
         self.poll_controller();
+        self.sync_decks();
         if self.rows_dirty {
             self.reload_rows();
         }

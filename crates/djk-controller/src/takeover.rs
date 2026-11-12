@@ -6,9 +6,9 @@
 //! which bumps a generation counter the MIDI thread watches.
 
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU32, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 
-use djk_core::{DeckId, EqBand};
+use djk_core::{DECK_COUNT, DeckId, EqBand, PadMode};
 
 /// Within this distance the hardware counts as matching the app value.
 pub const PICKUP_THRESHOLD: f32 = 0.02;
@@ -48,6 +48,10 @@ impl FaderTarget {
 pub struct AppValues {
     values: [AtomicU32; FaderTarget::COUNT],
     generations: [AtomicU32; FaderTarget::COUNT],
+    /// Each deck's pad mode (see [`PadMode`]), shared by the screen and the controller.
+    pad_modes: [AtomicU8; DECK_COUNT],
+    /// Whether each deck is choosing a pad mode (after SHIFT + BEAT SYNC).
+    selecting: [AtomicBool; DECK_COUNT],
 }
 
 impl Default for AppValues {
@@ -70,6 +74,8 @@ impl Default for AppValues {
                 v(eq),
             ],
             generations: Default::default(),
+            pad_modes: Default::default(),
+            selecting: Default::default(),
         }
     }
 }
@@ -92,6 +98,31 @@ impl AppValues {
     pub fn set_from_ui(&self, t: FaderTarget, value: f32) {
         self.set(t, value);
         self.generations[t.index()].fetch_add(1, Ordering::Release);
+    }
+
+    pub fn pad_mode(&self, deck: DeckId) -> PadMode {
+        match self.pad_modes[deck.index()].load(Ordering::Relaxed) {
+            1 => PadMode::BeatLoop,
+            _ => PadMode::HotCue,
+        }
+    }
+
+    /// Set a deck's pad mode (from the screen or the controller).
+    pub fn set_pad_mode(&self, deck: DeckId, mode: PadMode) {
+        let v = match mode {
+            PadMode::HotCue => 0,
+            PadMode::BeatLoop => 1,
+        };
+        self.pad_modes[deck.index()].store(v, Ordering::Relaxed);
+    }
+
+    /// Whether a deck is choosing its pad mode (after SHIFT + BEAT SYNC).
+    pub fn selecting(&self, deck: DeckId) -> bool {
+        self.selecting[deck.index()].load(Ordering::Relaxed)
+    }
+
+    pub fn set_selecting(&self, deck: DeckId, on: bool) {
+        self.selecting[deck.index()].store(on, Ordering::Relaxed);
     }
 }
 
@@ -119,6 +150,11 @@ impl Takeover {
             s.engaged = true;
         }
         Self { values, state }
+    }
+
+    /// The shared app values (also holding the pad modes).
+    pub fn values(&self) -> &Arc<AppValues> {
+        &self.values
     }
 
     /// Process a hardware value. Returns the value to apply, or `None` while waiting for

@@ -2,7 +2,7 @@
 //!
 //! Everything here runs on the audio thread: no allocation, locking or I/O.
 
-use djk_core::{DeckState, PITCH_RANGE, TrackBuffer};
+use djk_core::{ActiveLoop, DeckState, HotCues, PITCH_RANGE, TrackBuffer};
 
 /// Pitch-fraction of speed change per jog tick per block while playing (before decay).
 pub const JOG_NUDGE_PER_TICK: f64 = 0.01;
@@ -12,6 +12,8 @@ pub const JOG_NUDGE_MAX: f64 = 0.5;
 pub const JOG_NUDGE_DECAY_SECS: f64 = 0.06;
 /// Seconds of audio moved per jog tick while paused.
 pub const JOG_SEEK_SECS_PER_TICK: f64 = 0.004;
+/// Length of the crossfade at each loop wrap, which hides the jump's click.
+pub const LOOP_XFADE_SECS: f64 = 0.003;
 
 /// One deck of the engine.
 #[derive(Default)]
@@ -20,12 +22,23 @@ pub struct Deck {
     token: u64,
     position: f64,
     playing: bool,
+    /// Playing only while cue or a hot cue is held (see `held_hot_cue`).
     previewing: bool,
     cue: f64,
     pitch: f32,
     /// Accumulated jog velocity (ticks), decays towards 0.
     jog_velocity: f64,
     nudge: f64,
+    hot_cues: HotCues,
+    /// The hot cue being held for a preview, and where releasing it returns to.
+    held_hot_cue: Option<(u8, f64)>,
+    active_loop: Option<ActiveLoop>,
+    beat_frames: Option<f64>,
+    loop_refusals: u32,
+    /// After a loop wrap: the read position carrying on past the loop end, faded out
+    /// over `xfade_left` more output frames.
+    xfade_from: f64,
+    xfade_left: u32,
 }
 
 impl Deck {
@@ -34,8 +47,14 @@ impl Deck {
     }
 
     /// Replace the deck's track, returning the old buffer so the caller can retire it
-    /// off the audio thread. Resets position and cue to the start.
-    pub fn load(&mut self, buffer: TrackBuffer, token: u64) -> Option<TrackBuffer> {
+    /// off the audio thread. Resets position and cue to the start, ends any loop and
+    /// takes the new track's saved hot cues.
+    pub fn load(
+        &mut self,
+        buffer: TrackBuffer,
+        token: u64,
+        hot_cues: HotCues,
+    ) -> Option<TrackBuffer> {
         let old = self.buffer.replace(buffer);
         self.token = token;
         self.position = 0.0;
@@ -44,7 +63,25 @@ impl Deck {
         self.previewing = false;
         self.jog_velocity = 0.0;
         self.nudge = 0.0;
+        let frames = self.frames();
+        self.hot_cues = hot_cues.map(|c| c.filter(|&p| p >= 0.0 && p < frames));
+        self.held_hot_cue = None;
+        self.active_loop = None;
+        self.beat_frames = None;
+        self.xfade_left = 0;
         old
+    }
+
+    /// Move the playhead for a DJ action (seek, cue, hot cue). Leaving the active loop's
+    /// region ends the loop.
+    fn move_to(&mut self, frame: f64) {
+        self.position = frame.clamp(0.0, self.frames());
+        self.xfade_left = 0;
+        if let Some(l) = self.active_loop
+            && !(l.start..l.end).contains(&self.position)
+        {
+            self.active_loop = None;
+        }
     }
 
     pub fn is_loaded(&self) -> bool {
@@ -77,13 +114,15 @@ impl Deck {
         if self.is_loaded() && !self.at_end() {
             self.playing = true;
         }
-        // Pressing play during a cue preview keeps playing after cue is released.
+        // Pressing play during a cue or hot cue preview keeps playing after release.
         self.previewing = false;
+        self.held_hot_cue = None;
     }
 
     pub fn pause(&mut self) {
         self.playing = false;
         self.previewing = false;
+        self.held_hot_cue = None;
     }
 
     pub fn toggle_play(&mut self) {
@@ -104,7 +143,7 @@ impl Deck {
             return;
         }
         if self.playing && !self.previewing {
-            self.position = self.cue;
+            self.move_to(self.cue);
             self.playing = false;
             return;
         }
@@ -114,20 +153,108 @@ impl Deck {
         if !self.at_end() {
             self.playing = true;
             self.previewing = true;
+            self.held_hot_cue = None;
         }
     }
 
-    /// CDJ-style cue release: a preview returns to the cue point and pauses.
+    /// CDJ-style cue release: a cue preview returns to the cue point and pauses.
     pub fn cue_release(&mut self) {
-        if self.previewing {
+        if self.previewing && self.held_hot_cue.is_none() {
             self.previewing = false;
             self.playing = false;
-            self.position = self.cue;
+            self.move_to(self.cue);
         }
     }
 
     pub fn seek(&mut self, frame: f64) {
-        self.position = frame.clamp(0.0, self.frames());
+        self.move_to(frame);
+    }
+
+    /// Hot cue pad pressed. An empty slot is set at the playhead without changing
+    /// playback; a set one is jumped to, and on a paused deck it plays while held.
+    pub fn hot_cue_press(&mut self, slot: u8) {
+        let Some(&cue) = self.hot_cues.get(usize::from(slot)) else {
+            return;
+        };
+        if !self.is_loaded() {
+            return;
+        }
+        let Some(point) = cue else {
+            self.hot_cues[usize::from(slot)] = Some(self.position.min(self.frames()));
+            return;
+        };
+        self.move_to(point);
+        if self.playing && !self.previewing {
+            return; // jump and keep playing
+        }
+        if self.at_end() {
+            return;
+        }
+        self.playing = true;
+        self.previewing = true;
+        self.held_hot_cue = Some((slot, point));
+    }
+
+    /// Hot cue pad released: a preview from this slot returns to it and pauses.
+    pub fn hot_cue_release(&mut self, slot: u8) {
+        if let Some((held, point)) = self.held_hot_cue
+            && held == slot
+        {
+            self.held_hot_cue = None;
+            self.previewing = false;
+            self.playing = false;
+            self.move_to(point);
+        }
+    }
+
+    pub fn clear_hot_cue(&mut self, slot: u8) {
+        if let Some(c) = self.hot_cues.get_mut(usize::from(slot)) {
+            *c = None;
+        }
+    }
+
+    /// Set the length of one beat for the track `token` (ignored for any other track).
+    pub fn set_beat_length(&mut self, token: u64, frames: Option<f64>) {
+        if token == self.token {
+            self.beat_frames = frames.filter(|f| f.is_finite() && *f > 0.0);
+        }
+    }
+
+    /// Beat loop pad: start a loop of `beats` at the playhead (exactly there, never
+    /// snapped to the grid), resize the active loop from its start, or exit the loop if
+    /// it already has this length. Refused (and counted) when the tempo is unknown.
+    pub fn beat_loop(&mut self, beats: f64) {
+        if !self.is_loaded() || beats.is_nan() || beats <= 0.0 {
+            return;
+        }
+        let Some(beat) = self.beat_frames else {
+            self.loop_refusals = self.loop_refusals.wrapping_add(1);
+            return;
+        };
+        let frames = self.frames();
+        let len = beats * beat;
+        match self.active_loop {
+            Some(l) if l.beats == beats => self.active_loop = None,
+            Some(l) => {
+                let end = (l.start + len).min(frames);
+                if self.position >= end && end > l.start {
+                    self.position = l.start + (self.position - l.start) % (end - l.start);
+                    self.xfade_left = 0;
+                }
+                self.active_loop = Some(ActiveLoop { end, beats, ..l });
+            }
+            None => {
+                let start = self.position;
+                let end = (start + len).min(frames);
+                if end - start >= 1.0 {
+                    self.active_loop = Some(ActiveLoop { start, end, beats });
+                }
+            }
+        }
+    }
+
+    pub fn exit_loop(&mut self) {
+        self.active_loop = None;
     }
 
     pub fn set_pitch(&mut self, pitch: f32) {
@@ -174,17 +301,53 @@ impl Deck {
             * (1.0 + f64::from(self.pitch))
             * (1.0 + self.nudge);
 
+        let xfade_total = (f64::from(device_rate) * LOOP_XFADE_SECS).max(1.0) as u32;
         let mut pos = self.position;
         let mut i = 0;
         while i < n {
+            if let Some(lp) = self.active_loop
+                && pos >= lp.end
+            {
+                // Wrap, keeping the overshoot so the loop period stays exact, and fade
+                // out the audio that would have followed the loop end.
+                self.xfade_from = pos;
+                self.xfade_left = xfade_total;
+                pos = lp.start + (pos - lp.end) % (lp.end - lp.start);
+            }
             if pos >= end {
                 break;
             }
-            let (l, r) = hermite_frame(samples, frames, pos);
+            let (mut l, mut r) = hermite_frame(samples, frames, pos);
+            if self.xfade_left > 0 {
+                // Equal-power crossfade from the old read position into the new one.
+                let t = 1.0 - self.xfade_left as f32 / xfade_total as f32;
+                let (fade_in, fade_out) = (
+                    (t * std::f32::consts::FRAC_PI_2).sin(),
+                    (t * std::f32::consts::FRAC_PI_2).cos(),
+                );
+                let (ol, or) = if self.xfade_from < end {
+                    hermite_frame(samples, frames, self.xfade_from)
+                } else {
+                    (0.0, 0.0)
+                };
+                l = l * fade_in + ol * fade_out;
+                r = r * fade_in + or * fade_out;
+                self.xfade_from += step;
+                self.xfade_left -= 1;
+            }
             out_l[i] = l;
             out_r[i] = r;
             pos += step;
             i += 1;
+        }
+        // Wrap now if the block ended exactly at the loop end, so the playhead never
+        // reports a position past it (the crossfade carries on into the next block).
+        if let Some(lp) = self.active_loop
+            && pos >= lp.end
+        {
+            self.xfade_from = pos;
+            self.xfade_left = xfade_total;
+            pos = lp.start + (pos - lp.end) % (lp.end - lp.start);
         }
         out_l[i..n].fill(0.0);
         out_r[i..n].fill(0.0);
@@ -222,6 +385,10 @@ impl Deck {
             cue: self.cue,
             pitch: self.pitch,
             speed: self.speed(),
+            hot_cues: self.hot_cues,
+            active_loop: self.active_loop,
+            beat_frames: self.beat_frames,
+            loop_refusals: self.loop_refusals,
         }
     }
 }
@@ -291,7 +458,7 @@ mod tests {
     #[test]
     fn resampling_keeps_frequency() {
         let mut deck = Deck::new();
-        deck.load(sine(1000.0, 44_100, 1.0), 1);
+        deck.load(sine(1000.0, 44_100, 1.0), 1, Default::default());
         deck.play();
         let out = render_all(&mut deck, 48_000, 48_000);
         // 1 s of output at 48 kHz should contain ~1000 cycles.
@@ -303,7 +470,7 @@ mod tests {
     fn pitch_shortens_playback() {
         let rate = 48_000;
         let mut deck = Deck::new();
-        deck.load(sine(440.0, rate, 2.0), 1);
+        deck.load(sine(440.0, rate, 2.0), 1, Default::default());
         deck.set_pitch(0.024);
         deck.play();
         let mut l = vec![0.0; 1];
@@ -323,7 +490,7 @@ mod tests {
     #[test]
     fn stops_at_end() {
         let mut deck = Deck::new();
-        deck.load(sine(440.0, 48_000, 0.1), 1);
+        deck.load(sine(440.0, 48_000, 0.1), 1, Default::default());
         deck.play();
         let out = render_all(&mut deck, 48_000, 1_000_000);
         assert!(!deck.is_playing());
@@ -336,7 +503,7 @@ mod tests {
 
     fn loaded_deck() -> Deck {
         let mut deck = Deck::new();
-        deck.load(sine(440.0, 1_000, 200.0), 1);
+        deck.load(sine(440.0, 1_000, 200.0), 1, Default::default());
         deck
     }
 
@@ -428,5 +595,288 @@ mod tests {
         let mut deck = loaded_deck();
         deck.set_pitch(0.5);
         assert_eq!(deck.state().pitch, PITCH_RANGE);
+    }
+
+    // ---- Hot cues
+
+    fn render_frames(deck: &mut Deck, rate: u32, frames: usize) {
+        let mut l = vec![0.0; frames];
+        let mut r = vec![0.0; frames];
+        deck.render(rate, &mut l, &mut r);
+    }
+
+    #[test]
+    fn empty_hot_cue_is_set_at_the_playhead_while_playing() {
+        let mut deck = loaded_deck();
+        deck.seek(62_350.0);
+        deck.play();
+        deck.hot_cue_press(2);
+        deck.hot_cue_release(2);
+        let s = deck.state();
+        assert_eq!(s.hot_cues[2], Some(62_350.0));
+        assert!(s.playing, "playback is not interrupted");
+    }
+
+    #[test]
+    fn empty_hot_cue_set_while_paused_stays_paused() {
+        let mut deck = loaded_deck();
+        deck.seek(31_000.0);
+        deck.hot_cue_press(0);
+        deck.hot_cue_release(0);
+        let s = deck.state();
+        assert_eq!(s.hot_cues[0], Some(31_000.0));
+        assert!(!s.playing);
+        assert_eq!(s.position, 31_000.0);
+    }
+
+    #[test]
+    fn hot_cue_without_a_track_does_nothing() {
+        let mut deck = Deck::new();
+        deck.hot_cue_press(0);
+        assert_eq!(deck.state().hot_cues, [None; 8]);
+    }
+
+    #[test]
+    fn hot_cue_jumps_and_keeps_playing() {
+        let mut deck = loaded_deck();
+        deck.seek(45_000.0);
+        deck.hot_cue_press(1);
+        deck.hot_cue_release(1);
+        deck.seek(130_000.0);
+        deck.play();
+        deck.hot_cue_press(1);
+        let s = deck.state();
+        assert_eq!(s.position, 45_000.0);
+        assert!(s.playing);
+        deck.hot_cue_release(1);
+        assert!(deck.is_playing(), "release does nothing while playing");
+    }
+
+    #[test]
+    fn hot_cue_previews_while_held_when_paused() {
+        let mut deck = loaded_deck();
+        deck.seek(20_000.0);
+        deck.hot_cue_press(3);
+        deck.hot_cue_release(3);
+        deck.seek(90_000.0);
+        deck.hot_cue_press(3);
+        assert!(deck.is_playing());
+        render_frames(&mut deck, 1_000, 2_000);
+        assert!(deck.state().position > 20_000.0);
+        deck.hot_cue_release(3);
+        let s = deck.state();
+        assert!(!s.playing);
+        assert_eq!(s.position, 20_000.0);
+    }
+
+    #[test]
+    fn play_during_hot_cue_preview_keeps_playing() {
+        let mut deck = loaded_deck();
+        deck.hot_cue_press(4); // set at 0
+        deck.hot_cue_release(4);
+        deck.seek(5_000.0);
+        deck.hot_cue_press(4);
+        deck.play();
+        deck.hot_cue_release(4);
+        assert!(deck.is_playing());
+    }
+
+    #[test]
+    fn cleared_hot_cue_is_empty_and_playback_unchanged() {
+        let mut deck = loaded_deck();
+        deck.seek(10_000.0);
+        deck.hot_cue_press(2);
+        deck.play();
+        deck.clear_hot_cue(2);
+        let s = deck.state();
+        assert_eq!(s.hot_cues[2], None);
+        assert!(s.playing);
+        assert_eq!(s.position, 10_000.0);
+    }
+
+    #[test]
+    fn load_takes_the_tracks_hot_cues() {
+        let mut deck = loaded_deck();
+        deck.hot_cue_press(0);
+        let mut cues = [None; 8];
+        cues[1] = Some(500.0);
+        cues[7] = Some(1e12); // past the end: dropped
+        deck.load(sine(440.0, 1_000, 10.0), 2, cues);
+        let s = deck.state();
+        assert_eq!(s.hot_cues[0], None);
+        assert_eq!(s.hot_cues[1], Some(500.0));
+        assert_eq!(s.hot_cues[7], None);
+    }
+
+    // ---- Loops
+
+    /// 128 BPM at the 1 kHz test rate: one beat is 468.75 frames.
+    const BEAT_128: f64 = 60.0 / 128.0 * 1_000.0;
+
+    fn looping_deck() -> Deck {
+        let mut deck = loaded_deck();
+        deck.set_beat_length(1, Some(BEAT_128));
+        deck
+    }
+
+    #[test]
+    fn loop_length_comes_from_the_grid_not_the_pitch() {
+        let mut deck = looping_deck();
+        deck.set_pitch(0.04);
+        deck.seek(10_000.0);
+        deck.play();
+        deck.beat_loop(4.0);
+        let l = deck.state().active_loop.unwrap();
+        assert_eq!(l.end - l.start, 1_875.0, "4 beats of 128 BPM = 1.875 s");
+    }
+
+    #[test]
+    fn loop_starts_exactly_at_the_playhead() {
+        let mut deck = looping_deck();
+        deck.seek(60_240.0);
+        deck.play();
+        deck.beat_loop(2.0);
+        let l = deck.state().active_loop.unwrap();
+        assert_eq!(l.start, 60_240.0, "not snapped to any beat");
+        assert_eq!(l.end, 60_240.0 + 2.0 * BEAT_128);
+        render_frames(&mut deck, 1_000, 5_000);
+        let p = deck.state().position;
+        assert!((l.start..l.end).contains(&p), "still looping at {p}");
+    }
+
+    #[test]
+    fn loop_set_while_paused_loops_after_play() {
+        let mut deck = looping_deck();
+        deck.seek(5_000.0);
+        deck.beat_loop(8.0);
+        assert!(!deck.is_playing());
+        deck.play();
+        render_frames(&mut deck, 1_000, 20_000);
+        let l = deck.state().active_loop.unwrap();
+        assert!((l.start..l.end).contains(&deck.state().position));
+    }
+
+    #[test]
+    fn pressing_the_active_length_exits_the_loop() {
+        let mut deck = looping_deck();
+        deck.play();
+        deck.beat_loop(4.0);
+        deck.beat_loop(4.0);
+        assert_eq!(deck.state().active_loop, None);
+        render_frames(&mut deck, 1_000, 5_000);
+        assert!(
+            deck.state().position > 4.0 * BEAT_128,
+            "plays on past the end"
+        );
+    }
+
+    #[test]
+    fn another_length_resizes_from_the_same_start() {
+        let mut deck = looping_deck();
+        deck.seek(40_000.0);
+        deck.play();
+        deck.beat_loop(8.0);
+        render_frames(&mut deck, 1_000, 3_000); // into the second half
+        deck.beat_loop(4.0);
+        let l = deck.state().active_loop.unwrap();
+        assert_eq!(l.start, 40_000.0);
+        assert_eq!(l.end, 40_000.0 + 4.0 * BEAT_128);
+        assert_eq!(l.beats, 4.0);
+        let p = deck.state().position;
+        assert!(
+            (l.start..l.end).contains(&p),
+            "wrapped into the new loop: {p}"
+        );
+    }
+
+    #[test]
+    fn leaving_the_loop_region_ends_the_loop() {
+        let mut deck = looping_deck();
+        deck.seek(150_000.0);
+        deck.hot_cue_press(0); // hot cue at 2:30
+        deck.seek(60_000.0);
+        deck.play();
+        deck.beat_loop(4.0);
+        deck.hot_cue_press(0);
+        assert_eq!(deck.state().active_loop, None);
+        assert_eq!(deck.state().position, 150_000.0);
+
+        // A seek inside the loop keeps it; one outside ends it.
+        deck.beat_loop(4.0);
+        deck.seek(150_100.0);
+        assert!(deck.state().active_loop.is_some());
+        deck.seek(10.0);
+        assert_eq!(deck.state().active_loop, None);
+    }
+
+    #[test]
+    fn loop_without_a_tempo_is_refused_and_counted() {
+        let mut deck = loaded_deck();
+        deck.play();
+        deck.beat_loop(4.0);
+        let s = deck.state();
+        assert_eq!(s.active_loop, None);
+        assert_eq!(s.loop_refusals, 1);
+    }
+
+    #[test]
+    fn beat_length_for_another_track_is_ignored() {
+        let mut deck = loaded_deck();
+        deck.set_beat_length(99, Some(500.0));
+        assert_eq!(deck.state().beat_frames, None);
+    }
+
+    #[test]
+    fn loop_near_the_end_stops_at_the_end() {
+        let mut deck = looping_deck();
+        deck.seek(195_000.0); // 5 s before the end
+        deck.play();
+        deck.beat_loop(32.0);
+        let l = deck.state().active_loop.unwrap();
+        assert_eq!(l.end, 200_000.0);
+        render_frames(&mut deck, 1_000, 12_000);
+        let s = deck.state();
+        assert!(s.playing, "repeats rather than stopping at the end");
+        assert!((l.start..l.end).contains(&s.position));
+    }
+
+    #[test]
+    fn loop_wrap_is_seamless_exact_and_never_overshoots() {
+        let rate = 48_000;
+        let mut deck = Deck::new();
+        deck.load(sine(440.0, rate, 10.0), 1, Default::default());
+        // 1/4 beat at 174 BPM: the shortest common loop (~86 ms).
+        let beat = 60.0 / 174.0 * f64::from(rate);
+        deck.set_beat_length(1, Some(beat));
+        deck.seek(12_345.0);
+        deck.play();
+        deck.beat_loop(0.25);
+        let l = deck.state().active_loop.unwrap();
+        let len = l.end - l.start;
+
+        let block = 256;
+        let mut lb = vec![0.0; block];
+        let mut rb = vec![0.0; block];
+        let mut prev: Option<f32> = None;
+        let mut max_step = 0.0f32;
+        let mut frames = 0usize;
+        while (frames as f64) < 1_000.0 * len {
+            deck.render(rate, &mut lb, &mut rb);
+            frames += block;
+            let p = deck.state().position;
+            assert!(p >= l.start && p < l.end, "position {p} outside the loop");
+            for &v in &lb {
+                if let Some(pv) = prev {
+                    max_step = max_step.max((v - pv).abs());
+                }
+                prev = Some(v);
+            }
+        }
+        // A 440 Hz sine at 0.5 moves at most ~0.029 per sample; an unfaded jump would
+        // be up to 1.0. The crossfade keeps every step close to the sine's own slope.
+        assert!(max_step < 0.06, "largest step {max_step}");
+        let expected = l.start + (frames as f64) % len;
+        let p = deck.state().position;
+        assert!((p - expected).abs() < 1e-3, "drifted: {p} vs {expected}");
     }
 }

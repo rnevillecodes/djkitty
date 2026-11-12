@@ -19,6 +19,23 @@ pub const DECK_COUNT: usize = 2;
 /// Default pitch fader range (±8%).
 pub const PITCH_RANGE: f32 = 0.08;
 
+/// Hot cue slots per deck (one per performance pad).
+pub const HOT_CUE_COUNT: usize = 8;
+
+/// A deck's hot cues: a position in track frames per slot, or `None` when empty.
+pub type HotCues = [Option<f64>; HOT_CUE_COUNT];
+
+/// Beat loop lengths, in beats, for pads 1 to 8.
+pub const LOOP_BEATS: [f64; HOT_CUE_COUNT] = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0, 16.0, 32.0];
+
+/// What a deck's performance pads do.
+#[derive(Copy, Clone, Debug, Default, PartialEq, Eq, Hash)]
+pub enum PadMode {
+    #[default]
+    HotCue,
+    BeatLoop,
+}
+
 /// One of the two decks.
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum DeckId {
@@ -92,6 +109,26 @@ pub enum Command {
         band: EqBand,
         value: f32,
     },
+    /// Hot cue pad pressed: set an empty slot at the playhead, jump to a set one while
+    /// playing, or preview from it while paused (until released).
+    HotCuePress { deck: DeckId, slot: u8 },
+    /// Hot cue pad released: ends a preview started by that slot.
+    HotCueRelease { deck: DeckId, slot: u8 },
+    /// Empty a hot cue slot.
+    ClearHotCue { deck: DeckId, slot: u8 },
+    /// Length of one beat of the track in `token`, in track frames (from its beatgrid),
+    /// or 0 when it has no tempo (a plain `f64` keeps `Command` small). Ignored if the deck
+    /// holds another track.
+    SetBeatLength {
+        deck: DeckId,
+        token: u64,
+        frames: f64,
+    },
+    /// Beat loop pad: start a loop this many beats long at the playhead, resize the
+    /// active loop to it, or exit the loop if it already has this length.
+    BeatLoop { deck: DeckId, beats: f64 },
+    /// End the active loop and play on.
+    ExitLoop(DeckId),
 }
 
 /// A fully decoded track: interleaved stereo `f32` at its native sample rate.
@@ -120,6 +157,9 @@ pub struct LoadRequest {
     /// Opaque token echoed back in [`DeckState::track_token`] so the UI knows which
     /// track a deck holds (typically the [`TrackId`]).
     pub token: u64,
+    /// The track's saved hot cues, in track frames. Carried with the load (rather than
+    /// sent separately) so a refused load can't put them on the deck's current track.
+    pub hot_cues: HotCues,
 }
 
 /// Snapshot of one deck, published by the engine after every audio block.
@@ -139,6 +179,24 @@ pub struct DeckState {
     /// Current speed multiplier relative to the track's own speed:
     /// `(1 + pitch) * (1 + jog nudge)`, or 0 when paused.
     pub speed: f64,
+    pub hot_cues: HotCues,
+    pub active_loop: Option<ActiveLoop>,
+    /// One beat of the track in frames, if the engine knows its tempo.
+    pub beat_frames: Option<f64>,
+    /// Counts beat loops refused because the track has no tempo, so the UI can say why
+    /// (including for presses that came straight from the controller).
+    pub loop_refusals: u32,
+}
+
+/// A deck's active beat loop.
+#[derive(Copy, Clone, Debug, PartialEq)]
+pub struct ActiveLoop {
+    /// Start, in track frames.
+    pub start: f64,
+    /// End (exclusive), in track frames. Clamped to the end of the track.
+    pub end: f64,
+    /// The length it was started or resized to, in beats (one of [`LOOP_BEATS`]).
+    pub beats: f64,
 }
 
 impl Default for DeckState {
@@ -154,6 +212,10 @@ impl Default for DeckState {
             cue: 0.0,
             pitch: 0.0,
             speed: 0.0,
+            hot_cues: [None; HOT_CUE_COUNT],
+            active_loop: None,
+            beat_frames: None,
+            loop_refusals: 0,
         }
     }
 }

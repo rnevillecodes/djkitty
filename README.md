@@ -29,6 +29,13 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
   markers every 16 bars) and a bar.beat counter per deck. Detected automatically; click
   **GRID** in a waveform to fix one (set bar 1, nudge, halve/double or type the tempo,
   drag to slide). Your corrections are kept.
+- **Hot cues and loops:** eight pads per deck, on screen and on the controller. In **Hot Cue**
+  mode a pad sets a hot cue at the playhead, then jumps to it (hold it on a paused deck to
+  preview); right-click, Shift+click or SHIFT + pad clears it. Hot cues are saved with the
+  track. In **Loop** mode the pads loop 1/4 to 32 beats from exactly where you press (never
+  snapped to the grid); press the lit pad again to exit, or another to resize. On the
+  DDJ-FLX2, SHIFT + BEAT SYNC then pad 1 or pad 3 picks the mode. Hot cues and the active
+  loop show on the waveforms.
 - **Mixer:** channel faders, a **3-band EQ** per channel (HI/MID/LOW, +6 dB boost to full kill), a
   crossfader, master level, a peak limiter (no harsh
   clipping), and **headphone cue** on 4-channel devices (master on 1–2, headphones on 3–4).
@@ -95,8 +102,8 @@ status bar to see this list in the app.
 
 ## Not in v0.1
 
-Coming later, roughly in this order of priority: key-lock (time-stretch), loops and hot
-cues, filters, effects, scratching (jog touch), stems, recording, learning hints,
+Coming later, roughly in this order of priority: key-lock (time-stretch), manual loop in/out
+and beat jump, filters, effects, scratching (jog touch), stems, recording, learning hints,
 streaming services, and other controllers.
 
 **Never:** automatic beat sync. djkitty is for learning to DJ by hand, so beatgrids are a

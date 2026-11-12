@@ -72,6 +72,15 @@ const MIGRATIONS: &[&str] = &[
     r#"
     ALTER TABLE analysis ADD COLUMN lufs REAL;
     "#,
+    // v6: hot cues, one row per set slot, in track seconds.
+    r#"
+    CREATE TABLE hot_cues (
+        track_id      INTEGER NOT NULL REFERENCES tracks(id) ON DELETE CASCADE,
+        slot          INTEGER NOT NULL CHECK (slot BETWEEN 0 AND 7),
+        position_secs REAL NOT NULL,
+        UNIQUE (track_id, slot)
+    );
+    "#,
 ];
 
 /// Apply any migrations newer than the database's `user_version`.

@@ -37,6 +37,10 @@ pub const KEY: Color32 = Color32::from_rgb(0xb7, 0x8c, 0xff);
 
 pub const PLAYHEAD: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const CUE_MARKER: Color32 = Color32::from_rgb(0xff, 0xd2, 0x3f);
+/// Hot cue pads and markers.
+pub const HOT_CUE: Color32 = Color32::from_rgb(0xff, 0x5f, 0xa2);
+/// Beat loop pads and the active loop region.
+pub const LOOP: Color32 = Color32::from_rgb(0x5f, 0xd0, 0x8a);
 
 pub fn deck_colour(deck: DeckId) -> Color32 {
     match deck {

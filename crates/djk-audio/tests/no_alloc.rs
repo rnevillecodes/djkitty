@@ -95,6 +95,7 @@ fn process_never_allocates_or_frees() {
             deck,
             buffer: tone(2.0),
             token,
+            hot_cues: Default::default(),
         })
         .unwrap();
     }
@@ -113,6 +114,31 @@ fn process_never_allocates_or_frees() {
         Command::ToggleHeadphoneCue(DeckId::A),
         Command::CuePress(DeckId::B),
         Command::CueRelease(DeckId::B),
+        Command::SetBeatLength {
+            deck: DeckId::A,
+            token: 1,
+            frames: 12_000.0,
+        },
+        Command::HotCuePress {
+            deck: DeckId::A,
+            slot: 0,
+        },
+        Command::BeatLoop {
+            deck: DeckId::A,
+            beats: 0.25,
+        },
+        Command::BeatLoop {
+            deck: DeckId::A,
+            beats: 0.5,
+        },
+        Command::HotCuePress {
+            deck: DeckId::B,
+            slot: 2,
+        },
+        Command::ClearHotCue {
+            deck: DeckId::B,
+            slot: 2,
+        },
     ];
     for c in cmds.drain(..) {
         h.send(c);
@@ -131,6 +157,7 @@ fn process_never_allocates_or_frees() {
         deck: DeckId::A,
         buffer: tone(1.0),
         token: 3,
+        hot_cues: Default::default(),
     })
     .unwrap();
     // Refused load onto playing deck B is retired too.
@@ -138,6 +165,7 @@ fn process_never_allocates_or_frees() {
         deck: DeckId::B,
         buffer: tone(1.0),
         token: 4,
+        hot_cues: Default::default(),
     })
     .unwrap();
     let (allocs, frees) = measure(|| {

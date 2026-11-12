@@ -2,7 +2,7 @@
 
 use std::path::{Path, PathBuf};
 
-use djk_core::{Beatgrid, Key, TrackId};
+use djk_core::{Beatgrid, HOT_CUE_COUNT, Key, TrackId};
 use rusqlite::{OptionalExtension, Row, params};
 
 use crate::{Library, LibraryError, Result, file_stamp};
@@ -319,6 +319,46 @@ impl Library {
         if n == 0 {
             return Err(LibraryError::NotFound);
         }
+        Ok(())
+    }
+
+    /// A track's hot cues, in track seconds, by slot.
+    pub fn hot_cues(&self, id: TrackId) -> Result<[Option<f64>; HOT_CUE_COUNT]> {
+        let mut cues = [None; HOT_CUE_COUNT];
+        let mut stmt = self
+            .conn
+            .prepare_cached("SELECT slot, position_secs FROM hot_cues WHERE track_id = ?1")?;
+        let rows = stmt.query_map([id.0], |r| Ok((r.get::<_, i64>(0)?, r.get::<_, f64>(1)?)))?;
+        for row in rows {
+            let (slot, secs) = row?;
+            if let Some(c) = usize::try_from(slot).ok().and_then(|s| cues.get_mut(s)) {
+                *c = Some(secs);
+            }
+        }
+        Ok(cues)
+    }
+
+    /// Replace a track's hot cues (track seconds, by slot; `None` clears the slot).
+    pub fn set_hot_cues(&mut self, id: TrackId, cues: &[Option<f64>; HOT_CUE_COUNT]) -> Result<()> {
+        let tx = self.conn.transaction()?;
+        let exists: bool = tx.query_row(
+            "SELECT EXISTS (SELECT 1 FROM tracks WHERE id = ?1)",
+            [id.0],
+            |r| r.get(0),
+        )?;
+        if !exists {
+            return Err(LibraryError::NotFound);
+        }
+        tx.execute("DELETE FROM hot_cues WHERE track_id = ?1", [id.0])?;
+        for (slot, secs) in cues.iter().enumerate() {
+            if let Some(secs) = secs {
+                tx.execute(
+                    "INSERT INTO hot_cues (track_id, slot, position_secs) VALUES (?1, ?2, ?3)",
+                    params![id.0, slot as i64, secs],
+                )?;
+            }
+        }
+        tx.commit()?;
         Ok(())
     }
 

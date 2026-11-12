@@ -1,6 +1,6 @@
 //! Controller mappings as data: MIDI messages → controls → actions.
 
-use djk_core::{Command, DeckId, PITCH_RANGE};
+use djk_core::{Command, DeckId, LOOP_BEATS, PITCH_RANGE, PadMode};
 
 use crate::takeover::{FaderTarget, Takeover};
 
@@ -33,6 +33,65 @@ pub enum Control {
     Button(Button),
     Fader(FaderTarget, Part),
     Encoder(Encoder),
+    /// A deck's SHIFT button.
+    Shift(DeckId),
+    /// BEAT SYNC: never syncs. With SHIFT (held, or sent as its own `shifted` message)
+    /// it enters or leaves pad mode selection.
+    BeatSync {
+        deck: DeckId,
+        shifted: bool,
+    },
+    /// A performance pad (`slot` 0–7). `mode` is the mode the message itself belongs to,
+    /// when the hardware sends different notes per mode, or `None` to use the deck's
+    /// current mode. `shifted` when the message is SHIFT's variant of the pad.
+    Pad {
+        deck: DeckId,
+        mode: Option<PadMode>,
+        slot: u8,
+        shifted: bool,
+    },
+}
+
+/// Where a controller's performance pads sit in MIDI: a note channel per deck and a
+/// block of 8 notes per mode, with SHIFT's variants `shift_offset` notes higher. The
+/// same notes light the pads.
+#[derive(Copy, Clone, Debug)]
+pub struct PadLayout {
+    /// Note-on status byte for each deck's pads.
+    pub status: [u8; 2],
+    pub hot_cue: u8,
+    pub beat_loop: u8,
+    pub shift_offset: u8,
+}
+
+impl PadLayout {
+    /// First note of a mode's block.
+    pub fn base(&self, mode: PadMode) -> u8 {
+        match mode {
+            PadMode::HotCue => self.hot_cue,
+            PadMode::BeatLoop => self.beat_loop,
+        }
+    }
+
+    fn lookup(&self, status: u8, note: u8) -> Option<Control> {
+        let deck = DeckId::ALL
+            .into_iter()
+            .find(|d| self.status[d.index()] == status)?;
+        [PadMode::HotCue, PadMode::BeatLoop]
+            .into_iter()
+            .find_map(|mode| {
+                let base = self.base(mode);
+                [(base, false), (base + self.shift_offset, true)]
+                    .into_iter()
+                    .find(|(b, _)| (*b..*b + 8).contains(&note))
+                    .map(|(b, shifted)| Control::Pad {
+                        deck,
+                        mode: Some(mode),
+                        slot: note - b,
+                        shifted,
+                    })
+            })
+    }
 }
 
 /// Something the controller asks the app to do.
@@ -59,6 +118,7 @@ pub struct Mapping {
     /// Sent on connect to ask the controller to report every fader and knob position,
     /// so the app matches the hardware before anything is moved.
     pub request_state: Option<&'static [u8]>,
+    pub pads: Option<PadLayout>,
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -80,6 +140,7 @@ impl Mapping {
             .iter()
             .find(|((s, d), _)| *s == status && *d == data1)
             .map(|(_, c)| *c)
+            .or_else(|| self.pads.and_then(|p| p.lookup(status, data1)))
     }
 
     /// Note-on status byte for a deck's buttons and LEDs.
@@ -113,11 +174,34 @@ pub static DDJ_FLX2: Mapping = Mapping {
     request_state: Some(&[
         0xF0, 0x00, 0x40, 0x05, 0x00, 0x00, 0x02, 0x06, 0x00, 0x03, 0x01, 0xF7,
     ]),
+    // FLX4 layout: deck 1 pads on channel 8, deck 2 on channel 10; Hot Cue notes 0x00–0x07,
+    // Beat Loop 0x60–0x67, SHIFT variants 8 notes higher.
+    pads: Some(PadLayout {
+        status: [0x97, 0x99],
+        hot_cue: 0x00,
+        beat_loop: 0x60,
+        shift_offset: 0x08,
+    }),
     entries: &[
         // Deck 1 (MIDI channel 1)
         ((0x90, 0x0B), C::Button(B::Play(A))),
         ((0x90, 0x0C), C::Button(B::Cue(A))),
         ((0x90, 0x54), C::Button(B::HeadphoneCue(A))),
+        ((0x90, 0x3F), C::Shift(A)),
+        (
+            (0x90, 0x58),
+            C::BeatSync {
+                deck: A,
+                shifted: false,
+            },
+        ),
+        (
+            (0x90, 0x5C),
+            C::BeatSync {
+                deck: A,
+                shifted: true,
+            },
+        ),
         ((0xB0, 0x00), C::Fader(F::Pitch(A), Msb)),
         ((0xB0, 0x20), C::Fader(F::Pitch(A), Lsb)),
         ((0xB0, 0x13), C::Fader(F::Channel(A), Msb)),
@@ -135,6 +219,21 @@ pub static DDJ_FLX2: Mapping = Mapping {
         ((0x91, 0x0B), C::Button(B::Play(DB))),
         ((0x91, 0x0C), C::Button(B::Cue(DB))),
         ((0x91, 0x54), C::Button(B::HeadphoneCue(DB))),
+        ((0x91, 0x3F), C::Shift(DB)),
+        (
+            (0x91, 0x58),
+            C::BeatSync {
+                deck: DB,
+                shifted: false,
+            },
+        ),
+        (
+            (0x91, 0x5C),
+            C::BeatSync {
+                deck: DB,
+                shifted: true,
+            },
+        ),
         ((0xB1, 0x00), C::Fader(F::Pitch(DB), Msb)),
         ((0xB1, 0x20), C::Fader(F::Pitch(DB), Lsb)),
         ((0xB1, 0x13), C::Fader(F::Channel(DB), Msb)),
@@ -162,6 +261,10 @@ pub struct Translator {
     pub mapping: &'static Mapping,
     msb: [u8; FaderTarget::COUNT],
     pub takeover: Takeover,
+    /// Whether each deck's SHIFT is held.
+    shift: [bool; 2],
+    /// The pad each deck pressed to choose its mode, whose release is ignored.
+    choosing_pad: [Option<u8>; 2],
 }
 
 impl Translator {
@@ -170,6 +273,8 @@ impl Translator {
             mapping,
             msb: [0; FaderTarget::COUNT],
             takeover,
+            shift: [false; 2],
+            choosing_pad: [None; 2],
         }
     }
 
@@ -220,8 +325,82 @@ impl Translator {
                     E::Browse => Some(Action::Browse(delta)),
                 }
             }
+            C::Shift(deck) => {
+                self.shift[deck.index()] = !note_off && value > 0;
+                None
+            }
+            C::BeatSync { deck, shifted } => {
+                // BEAT SYNC never syncs: its only job is SHIFT + BEAT SYNC → pad modes.
+                let pressed = !note_off && value > 0;
+                if pressed && (shifted || self.shift[deck.index()]) {
+                    let values = self.takeover.values();
+                    values.set_selecting(deck, !values.selecting(deck));
+                }
+                None
+            }
+            C::Pad {
+                deck,
+                mode,
+                slot,
+                shifted,
+            } => {
+                let pressed = !note_off && value > 0;
+                let shifted = shifted || self.shift[deck.index()];
+                // The pad pressed to choose a mode does nothing when released.
+                if !pressed && self.choosing_pad[deck.index()] == Some(slot) {
+                    self.choosing_pad[deck.index()] = None;
+                    return None;
+                }
+                if pressed && self.takeover.values().selecting(deck) {
+                    self.choosing_pad[deck.index()] = Some(slot);
+                }
+                pad_action(self.takeover.values(), deck, mode, slot, shifted, pressed)
+            }
         }
     }
+}
+
+/// What a pad does. During mode selection, pad 1 picks Hot Cue and pad 3 Beat Loop (any
+/// pad ends selection; Pad FX and Sampler are not supported, so they keep the mode).
+/// Otherwise the pad acts in the mode its message belongs to (which the deck then takes
+/// on, when the hardware tracks the mode itself) or the deck's current mode.
+fn pad_action(
+    values: &crate::takeover::AppValues,
+    deck: DeckId,
+    mode: Option<PadMode>,
+    slot: u8,
+    shifted: bool,
+    pressed: bool,
+) -> Option<Action> {
+    if values.selecting(deck) {
+        if pressed {
+            values.set_selecting(deck, false);
+            match slot {
+                0 => values.set_pad_mode(deck, PadMode::HotCue),
+                2 => values.set_pad_mode(deck, PadMode::BeatLoop),
+                _ => {}
+            }
+        }
+        return None;
+    }
+    let mode = match mode {
+        Some(m) if pressed => {
+            values.set_pad_mode(deck, m);
+            m
+        }
+        _ => values.pad_mode(deck),
+    };
+    let cmd = match (mode, pressed, shifted) {
+        (PadMode::HotCue, true, true) => Command::ClearHotCue { deck, slot },
+        (PadMode::HotCue, true, false) => Command::HotCuePress { deck, slot },
+        (PadMode::HotCue, false, _) => Command::HotCueRelease { deck, slot },
+        (PadMode::BeatLoop, true, false) => Command::BeatLoop {
+            deck,
+            beats: *LOOP_BEATS.get(usize::from(slot))?,
+        },
+        (PadMode::BeatLoop, _, _) => return None,
+    };
+    Some(Action::Engine(cmd))
 }
 
 fn button_action(b: Button, pressed: bool) -> Option<Action> {
@@ -397,9 +576,9 @@ mod tests {
     #[test]
     fn unmapped_controls_are_ignored() {
         let (mut t, _) = translator();
-        // Performance pads, sync, FX, shift layers, sysex-ish junk, short messages.
+        // Pads in unsupported modes (Pad FX), BEAT SYNC alone, FX, junk, short messages.
         for msg in [
-            &[0x97, 0x00, 0x7F][..],
+            &[0x97, 0x10, 0x7F][..],
             &[0x90, 0x58, 0x7F],
             &[0x94, 0x47, 0x7F],
             &[0xB4, 0x02, 0x40],
@@ -409,5 +588,170 @@ mod tests {
         ] {
             assert_eq!(t.translate(msg), None, "{msg:02X?}");
         }
+    }
+
+    // ---- Pads and pad modes (provisional FLX4 numbers: deck A pads on 0x97, B on 0x99)
+
+    const SHIFT_A: u8 = 0x3F;
+    const SYNC: u8 = 0x58;
+
+    /// SHIFT + BEAT SYNC on a deck, then a pad (slot 0–7) to choose the mode.
+    fn choose_mode(t: &mut Translator, deck_status: u8, pad_status: u8, slot: u8) {
+        assert_eq!(t.translate(&[deck_status, SHIFT_A, 0x7F]), None);
+        assert_eq!(t.translate(&[deck_status, SYNC, 0x7F]), None);
+        assert_eq!(t.translate(&[deck_status, SYNC, 0x00]), None);
+        assert_eq!(t.translate(&[deck_status, SHIFT_A, 0x00]), None);
+        assert_eq!(
+            t.translate(&[pad_status, slot, 0x7F]),
+            None,
+            "choosing does nothing else"
+        );
+        t.translate(&[pad_status, slot, 0x00]);
+    }
+
+    #[test]
+    fn decks_start_in_hot_cue_mode() {
+        let (_, values) = translator();
+        assert_eq!(values.pad_mode(A), PadMode::HotCue);
+        assert_eq!(values.pad_mode(DB), PadMode::HotCue);
+    }
+
+    #[test]
+    fn shift_beat_sync_then_pad_3_switches_only_that_deck_to_beat_loop() {
+        let (mut t, values) = translator();
+        choose_mode(&mut t, 0x90, 0x97, 2);
+        assert_eq!(values.pad_mode(A), PadMode::BeatLoop);
+        assert_eq!(
+            values.pad_mode(DB),
+            PadMode::HotCue,
+            "deck B keeps its mode"
+        );
+        assert!(!values.selecting(A), "selection ends");
+        // And back with pad 1.
+        choose_mode(&mut t, 0x90, 0x97, 0);
+        assert_eq!(values.pad_mode(A), PadMode::HotCue);
+    }
+
+    #[test]
+    fn shifted_beat_sync_message_also_enters_selection() {
+        let (mut t, values) = translator();
+        t.translate(&[0x91, 0x5C, 0x7F]);
+        assert!(values.selecting(DB));
+        assert!(!values.selecting(A));
+    }
+
+    #[test]
+    fn unsupported_mode_choice_keeps_the_mode() {
+        let (mut t, values) = translator();
+        for slot in [1u8, 3] {
+            choose_mode(&mut t, 0x91, 0x99, slot); // Pad FX, Sampler
+            assert_eq!(values.pad_mode(DB), PadMode::HotCue);
+        }
+    }
+
+    #[test]
+    fn shift_beat_sync_again_leaves_selection_without_choosing() {
+        let (mut t, values) = translator();
+        t.translate(&[0x90, 0x5C, 0x7F]);
+        assert!(values.selecting(A));
+        t.translate(&[0x90, 0x5C, 0x7F]);
+        assert!(!values.selecting(A));
+        assert_eq!(values.pad_mode(A), PadMode::HotCue);
+        // Pads act normally again.
+        assert_eq!(
+            engine(t.translate(&[0x97, 0x04, 0x7F])),
+            Command::HotCuePress { deck: A, slot: 4 }
+        );
+    }
+
+    #[test]
+    fn beat_sync_alone_never_syncs() {
+        let (mut t, values) = translator();
+        assert_eq!(t.translate(&[0x91, SYNC, 0x7F]), None);
+        assert_eq!(t.translate(&[0x91, SYNC, 0x00]), None);
+        assert!(!values.selecting(DB));
+    }
+
+    #[test]
+    fn hot_cue_pads_press_release_and_shift_clear() {
+        let (mut t, _) = translator();
+        assert_eq!(
+            engine(t.translate(&[0x97, 0x04, 0x7F])),
+            Command::HotCuePress { deck: A, slot: 4 }
+        );
+        assert_eq!(
+            engine(t.translate(&[0x87, 0x04, 0x00])),
+            Command::HotCueRelease { deck: A, slot: 4 },
+            "note-off releases"
+        );
+        // SHIFT's own pad notes (8 higher) clear.
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x0A, 0x7F])),
+            Command::ClearHotCue { deck: DB, slot: 2 }
+        );
+        // So does a plain pad while that deck's SHIFT is held.
+        t.translate(&[0x91, SHIFT_A, 0x7F]);
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x02, 0x7F])),
+            Command::ClearHotCue { deck: DB, slot: 2 }
+        );
+    }
+
+    #[test]
+    fn beat_loop_pads_map_to_loop_lengths() {
+        let (mut t, values) = translator();
+        choose_mode(&mut t, 0x91, 0x99, 2);
+        // In Beat Loop mode the FLX4 sends its loop notes (0x60–0x67).
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x64, 0x7F])),
+            Command::BeatLoop {
+                deck: DB,
+                beats: 4.0
+            },
+            "pad 5 = 4 beats"
+        );
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x60, 0x7F])),
+            Command::BeatLoop {
+                deck: DB,
+                beats: 0.25
+            }
+        );
+        assert_eq!(
+            engine(t.translate(&[0x99, 0x67, 0x7F])),
+            Command::BeatLoop {
+                deck: DB,
+                beats: 32.0
+            }
+        );
+        assert_eq!(
+            t.translate(&[0x99, 0x64, 0x00]),
+            None,
+            "release does nothing"
+        );
+        assert_eq!(values.pad_mode(DB), PadMode::BeatLoop);
+    }
+
+    #[test]
+    fn mode_agnostic_pads_follow_the_shared_mode() {
+        // The screen switched deck A to Beat Loop; a pad whose message carries no mode
+        // follows it.
+        let (_, values) = translator();
+        values.set_pad_mode(A, PadMode::BeatLoop);
+        assert_eq!(
+            pad_action(&values, A, None, 2, false, true),
+            Some(Action::Engine(Command::BeatLoop {
+                deck: A,
+                beats: 1.0
+            }))
+        );
+    }
+
+    #[test]
+    fn a_pad_in_another_mode_moves_the_deck_to_that_mode() {
+        // Hardware that tracks the mode itself: its loop notes put the deck in Beat Loop.
+        let (mut t, values) = translator();
+        t.translate(&[0x97, 0x61, 0x7F]);
+        assert_eq!(values.pad_mode(A), PadMode::BeatLoop);
     }
 }

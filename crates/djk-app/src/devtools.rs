@@ -86,6 +86,7 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
             deck: DeckId::A,
             buffer,
             token: 1,
+            hot_cues: Default::default(),
         })
         .map_err(|_| anyhow::anyhow!("load queue full"))?;
     match route {

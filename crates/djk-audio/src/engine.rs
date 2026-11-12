@@ -51,6 +51,9 @@ impl EngineHandles {
 
     /// Queue a track load, ordered with the other UI commands. Returns the request back if
     /// a queue is full.
+    // The request stays inline (not boxed): the audio thread drops what it takes, and
+    // dropping a box there would free memory on the real-time thread.
+    #[allow(clippy::result_large_err)]
     pub fn load(&mut self, req: LoadRequest) -> Result<(), LoadRequest> {
         if self.ui.is_full() {
             return Err(req);
@@ -239,7 +242,7 @@ impl Engine {
             self.refused_loads += 1;
             Some(req.buffer)
         } else {
-            deck.load(req.buffer, req.token)
+            deck.load(req.buffer, req.token, req.hot_cues)
         };
         if let Some(buf) = retired {
             // Room was checked before popping the Load command.
@@ -260,6 +263,18 @@ impl Engine {
             Command::Seek { deck, frame } => self.decks[deck.index()].seek(frame),
             Command::SetPitch { deck, pitch } => self.decks[deck.index()].set_pitch(pitch),
             Command::Jog { deck, ticks } => self.decks[deck.index()].jog(ticks),
+            Command::HotCuePress { deck, slot } => self.decks[deck.index()].hot_cue_press(slot),
+            Command::HotCueRelease { deck, slot } => {
+                self.decks[deck.index()].hot_cue_release(slot);
+            }
+            Command::ClearHotCue { deck, slot } => self.decks[deck.index()].clear_hot_cue(slot),
+            Command::SetBeatLength {
+                deck,
+                token,
+                frames,
+            } => self.decks[deck.index()].set_beat_length(token, Some(frames)),
+            Command::BeatLoop { deck, beats } => self.decks[deck.index()].beat_loop(beats),
+            Command::ExitLoop(d) => self.decks[d.index()].exit_loop(),
             Command::SetChannelFader { deck, value } => {
                 mix.channel_fader[deck.index()] = value.clamp(0.0, 1.0);
             }
@@ -327,6 +342,7 @@ mod tests {
             deck,
             buffer: buf,
             token,
+            hot_cues: Default::default(),
         })
         .unwrap();
     }

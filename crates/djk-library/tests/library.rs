@@ -462,6 +462,11 @@ fn a_library_on_the_first_beatgrid_schema_upgrades() {
         lib.beatgrid(id).unwrap().unwrap().grid,
         Beatgrid::with_phase(128.0, 0.5, 1)
     );
+    // Later migrations apply too: hot cues (v6) work on the upgraded library.
+    let mut cues = [None; 8];
+    cues[2] = Some(12.5);
+    lib.set_hot_cues(id, &cues).unwrap();
+    assert_eq!(lib.hot_cues(id).unwrap(), cues);
 }
 
 #[test]
@@ -595,4 +600,39 @@ fn imports_dropped_files_and_folders() {
     let again = lib.import_paths(&[folder], |_| {}).unwrap();
     assert_eq!((again.added, again.existing), (0, 2));
     assert_eq!(again.tracks, s.tracks[1..].to_vec());
+}
+
+#[test]
+fn hot_cues_round_trip_clear_and_go_with_the_track() {
+    let tmp = tempfile::tempdir().unwrap();
+    let mut lib = library_with_titles(tmp.path());
+    let all = ids(&lib);
+    let id = all[0];
+    assert_eq!(lib.hot_cues(id).unwrap(), [None; 8], "fresh track has none");
+
+    let mut cues = [None; 8];
+    cues[0] = Some(31.0);
+    cues[4] = Some(62.35);
+    lib.set_hot_cues(id, &cues).unwrap();
+    assert_eq!(lib.hot_cues(id).unwrap(), cues);
+    assert_eq!(
+        lib.hot_cues(all[1]).unwrap(),
+        [None; 8],
+        "other tracks untouched"
+    );
+
+    // Clearing a slot removes it; the rest stay.
+    cues[0] = None;
+    lib.set_hot_cues(id, &cues).unwrap();
+    assert_eq!(lib.hot_cues(id).unwrap(), cues);
+
+    // Survives reopening the library.
+    drop(lib);
+    let mut lib = library(tmp.path());
+    assert_eq!(lib.hot_cues(id).unwrap()[4], Some(62.35));
+
+    // Removing the track removes its cues.
+    lib.remove_track(id).unwrap();
+    assert_eq!(lib.hot_cues(id).unwrap(), [None; 8]);
+    assert!(lib.set_hot_cues(id, &cues).is_err(), "no such track");
 }

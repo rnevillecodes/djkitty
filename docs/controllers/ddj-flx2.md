@@ -71,3 +71,34 @@ the truth, so the first message from each fader is applied without waiting for p
 | Question                                   | Observed |
 |--------------------------------------------|----------|
 | FLX2 answers the SysEx with all positions  | _todo_   |
+
+## Pads and pad modes
+
+djkitty uses the FLX2's own pad mode selection: hold **SHIFT** and press a deck's
+**BEAT SYNC**, then press pad 1 for **Hot Cue** or pad 3 for **Beat Loop** (pad 2, Pad FX,
+and pad 4, Sampler, are not supported yet and keep the current mode). BEAT SYNC never
+syncs tempo. Each deck has its own mode, mirrored by the on-screen pad row.
+
+| Mode      | Pad action                                                                    |
+|-----------|-------------------------------------------------------------------------------|
+| Hot Cue   | Empty pad: set at the playhead. Set pad: jump (paused: preview while held). SHIFT + pad: clear |
+| Beat Loop | Pads 1–8: 1/4, 1/2, 1, 2, 4, 8, 16, 32-beat loop from the playhead. Lit pad again: exit; other pad: resize |
+
+Messages are PROVISIONAL (FLX4 numbers) until recorded with `--midi-monitor`:
+
+| Control                     | Expected (FLX4)                                    | Observed on FLX2 |
+|-----------------------------|----------------------------------------------------|------------------|
+| SHIFT                       | note `0x3F`, deck channel                          | _todo_ |
+| BEAT SYNC                   | note `0x58`, deck channel (`0x5C` with SHIFT)      | _todo_ |
+| Pads, Hot Cue mode          | notes `0x00`–`0x07`, ch 8 (deck 1) / ch 10 (deck 2), SHIFT `0x08`–`0x0F` | _todo_ |
+| Pads, Beat Loop mode        | notes `0x60`–`0x67`, same channels, SHIFT `0x68`–`0x6F` | _todo_ |
+| Pad LEDs                    | the pad's own note sent back, `0x7F` on / `0x00` off | _todo_ |
+
+| Question                                                        | Observed |
+|-----------------------------------------------------------------|----------|
+| Do pad notes change with the mode (hardware tracks the mode)?   | _todo_   |
+| Can software switch the FLX2's pad mode (on-screen switch → hardware)? | _todo_ |
+
+If the hardware tracks the mode itself, a pad press in the other mode moves djkitty's
+deck to that mode, and the on-screen switch only changes the screen until the next pad
+press.

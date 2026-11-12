@@ -360,6 +360,77 @@ pub fn knob(
     (resp, out)
 }
 
+/// A rubber performance pad, backlit in `colour` when `lit`. Senses click and drag so
+/// press-and-hold works (hot cue preview).
+pub fn pad(
+    ui: &mut Ui,
+    size: Vec2,
+    label: &str,
+    colour: Color32,
+    lit: bool,
+    enabled: bool,
+) -> Response {
+    let sense = if enabled {
+        Sense::click_and_drag()
+    } else {
+        Sense::hover()
+    };
+    let (rect, resp) = ui.allocate_exact_size(size, sense);
+    let painter = ui.painter_at(rect.expand(3.0));
+    let pressed = resp.is_pointer_button_down_on();
+    let hovered = resp.hovered() && enabled;
+    let r = CornerRadius::same(5);
+    painter.rect_filled(
+        rect.translate(vec2(0.0, 1.5)),
+        r,
+        Color32::from_black_alpha(140),
+    );
+    let body = rect.translate(vec2(0.0, if pressed { 1.0 } else { 0.0 }));
+    let fill = if lit {
+        mix(
+            Color32::from_rgb(0x26, 0x29, 0x30),
+            colour,
+            if pressed { 0.9 } else { 0.7 },
+        )
+    } else if hovered {
+        Color32::from_rgb(0x34, 0x38, 0x41)
+    } else {
+        Color32::from_rgb(0x26, 0x29, 0x30)
+    };
+    painter.rect_filled(body, r, fill);
+    painter.rect_stroke(
+        body,
+        r,
+        Stroke::new(
+            1.0,
+            if lit {
+                colour
+            } else {
+                Color32::from_white_alpha(16)
+            },
+        ),
+        StrokeKind::Inside,
+    );
+    let ink = if !enabled {
+        theme::TEXT_DIM.gamma_multiply(0.5)
+    } else if lit {
+        Color32::from_rgb(0x12, 0x14, 0x18)
+    } else {
+        theme::TEXT_DIM
+    };
+    painter.text(
+        body.center(),
+        Align2::CENTER_CENTER,
+        label,
+        FontId::proportional(11.0),
+        ink,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    resp
+}
+
 /// What a round transport button draws in its centre.
 #[derive(Clone, Copy)]
 pub enum TransportIcon {

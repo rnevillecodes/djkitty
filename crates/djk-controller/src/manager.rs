@@ -144,7 +144,7 @@ impl ControllerManager {
             self.last_leds = None;
             return;
         };
-        let want = led::desired(state, time_secs);
+        let want = led::desired(state, &self.values, time_secs);
         if self.last_leds == Some(want) {
             return;
         }

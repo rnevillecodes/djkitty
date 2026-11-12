@@ -7,8 +7,8 @@
 
 use djk_analysis::Waveform;
 use djk_analysis::waveform::Bin;
-use djk_core::Beatgrid;
 use djk_core::grid::{BARS_PER_PHRASE, BEATS_PER_BAR};
+use djk_core::{Beatgrid, HOT_CUE_COUNT};
 use egui::{Color32, Mesh, Pos2, Rect, Sense, Stroke, Ui, Vec2};
 
 use crate::theme;
@@ -266,6 +266,89 @@ fn hairline(
     );
 }
 
+/// Hot cues and the active loop to draw over a waveform, in one time unit (seconds for a
+/// scrolling lane, fractions of the track for an overview).
+#[derive(Clone, Copy, Default)]
+pub struct Marks {
+    pub hot_cues: [Option<f64>; HOT_CUE_COUNT],
+    pub loop_range: Option<(f64, f64)>,
+}
+
+impl Marks {
+    /// Marks for a deck's snapshot, with times converted by `f` from track frames.
+    pub fn from_deck(s: &djk_core::DeckState, f: impl Fn(f64) -> f64) -> Self {
+        if !s.loaded {
+            return Self::default();
+        }
+        Self {
+            hot_cues: s.hot_cues.map(|c| c.map(&f)),
+            loop_range: s.active_loop.map(|l| (f(l.start), f(l.end))),
+        }
+    }
+}
+
+/// Draw `marks` in `rect`, placing time `t` at `x_of(t)`: the loop as a shaded region
+/// with bright edges, and hot cues as numbered flags. `compact` drops the numbers.
+fn draw_marks(
+    painter: &egui::Painter,
+    rect: Rect,
+    marks: &Marks,
+    x_of: impl Fn(f64) -> f32,
+    compact: bool,
+) {
+    let visible = |x: f32| (rect.left() - 1.0..=rect.right() + 1.0).contains(&x);
+    if let Some((a, b)) = marks.loop_range {
+        let (x0, x1) = (x_of(a), x_of(b));
+        let shade =
+            Rect::from_x_y_ranges(x0.max(rect.left())..=x1.min(rect.right()), rect.y_range());
+        if shade.width() > 0.0 {
+            painter.rect_filled(shade, 0.0, theme::LOOP.gamma_multiply(0.18));
+        }
+        for x in [x0, x1] {
+            if visible(x) {
+                painter.line_segment(
+                    [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+                    Stroke::new(1.5, theme::LOOP),
+                );
+            }
+        }
+    }
+    for (slot, t) in marks.hot_cues.iter().enumerate() {
+        let Some(t) = *t else { continue };
+        let x = x_of(t);
+        if !visible(x) {
+            continue;
+        }
+        painter.line_segment(
+            [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],
+            Stroke::new(1.5, theme::HOT_CUE),
+        );
+        if compact {
+            painter.add(egui::Shape::convex_polygon(
+                vec![
+                    Pos2::new(x - 3.5, rect.top()),
+                    Pos2::new(x + 3.5, rect.top()),
+                    Pos2::new(x, rect.top() + 4.5),
+                ],
+                theme::HOT_CUE,
+                Stroke::NONE,
+            ));
+        } else {
+            // A numbered flag at the bottom, clear of the bar numbers along the top.
+            let flag =
+                Rect::from_min_size(Pos2::new(x, rect.bottom() - 14.0), Vec2::new(12.0, 14.0));
+            painter.rect_filled(flag, 2.0, theme::HOT_CUE);
+            painter.text(
+                flag.center(),
+                egui::Align2::CENTER_CENTER,
+                (slot + 1).to_string(),
+                egui::FontId::monospace(10.0),
+                theme::BG,
+            );
+        }
+    }
+}
+
 /// What a scrolling lane shows.
 pub struct Lane<'a> {
     pub peaks: Option<&'a Peaks>,
@@ -278,6 +361,8 @@ pub struct Lane<'a> {
     pub grid: Option<Beatgrid>,
     pub accent: Color32,
     pub label: &'a str,
+    /// Hot cues and the active loop, in track seconds.
+    pub marks: Marks,
     /// Grid editing: beat lines are brighter and the lane can be dragged to slide the grid.
     pub editing: bool,
 }
@@ -332,6 +417,7 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
         accent,
         label,
         editing,
+        marks,
     } = *lane;
     let sense = if editing {
         Sense::click_and_drag()
@@ -461,6 +547,15 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
         }
     }
 
+    if peaks.is_some() {
+        draw_marks(
+            &painter,
+            rect,
+            &marks,
+            |t| rect.left() + ((t - start) / window) as f32 * width,
+            false,
+        );
+    }
     if let Some(cue) = cue_secs {
         let x = rect.left() + ((cue - start) / window) as f32 * width;
         if (rect.left()..=rect.right()).contains(&x) {
@@ -521,6 +616,7 @@ pub fn overview(
     accent: Color32,
     clickable: bool,
     grid: Option<(Beatgrid, f64)>,
+    marks: Marks,
 ) -> OverviewResponse {
     let sense = if clickable {
         Sense::click()
@@ -609,6 +705,13 @@ pub fn overview(
             Stroke::new(width, colour),
         );
     };
+    draw_marks(
+        &painter,
+        rect,
+        &marks,
+        |f| rect.left() + rect.width() * f.clamp(0.0, 1.0) as f32,
+        true,
+    );
     if let Some(c) = cue_frac {
         marker(c, theme::CUE_MARKER, 1.5);
     }

@@ -5,7 +5,8 @@ use std::time::{Duration, Instant};
 
 use djk_controller::FaderTarget;
 use djk_core::{
-    Bpm, Command, DeckId, DeckState, EQ_NEUTRAL, EngineState, EqBand, MixerState, PITCH_RANGE,
+    Bpm, Command, DeckId, DeckState, EQ_NEUTRAL, EngineState, EqBand, HOT_CUE_COUNT, LOOP_BEATS,
+    MixerState, PITCH_RANGE, PadMode,
 };
 use djk_library::SortKey;
 use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
@@ -18,7 +19,7 @@ use crate::waveview;
 use crate::widgets;
 
 /// Height of the row holding the two deck panels and the mixer.
-const DECKS_ROW_HEIGHT: f32 = 222.0;
+const DECKS_ROW_HEIGHT: f32 = 270.0;
 const MIXER_WIDTH: f32 = 222.0;
 /// Panel with the master and headphone level knobs, left of the mixer.
 const LEVELS_WIDTH: f32 = 64.0;
@@ -123,6 +124,7 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
                 accent: theme::deck_colour(deck),
                 label: deck.label(),
                 editing,
+                marks: waveview::Marks::from_deck(&s, |f| f / f64::from(s.track_rate.max(1))),
             },
             &mut app.wave_window_secs,
         );
@@ -404,6 +406,10 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
     track_drop_target(app, ui, rect, |_| deck);
 }
 
+/// Below this width the deck header switches to its compact form (narrower BPM screen,
+/// shorter drag hint). At the default window size the decks are wider than this.
+const DECK_NARROW_WIDTH: f32 = 300.0;
+
 /// The deck's left part: header with the BPM screen, status, overview and transport.
 fn deck_main(
     app: &mut DjApp,
@@ -422,8 +428,12 @@ fn deck_main(
         .filter(|_| s.loaded || app.decks[deck.index()].loading)
         .cloned();
 
-    // Header: deck badge, title/artist, and the BPM/key screen.
-    let screen_w = 132.0;
+    // Header: deck badge, title/artist, and the BPM/key screen. Near the minimum window
+    // size the screen narrows and the text truncates, so the header stays one row tall
+    // and everything below it still fits in the card.
+    let narrow = width < DECK_NARROW_WIDTH;
+    let screen_w = if narrow { 92.0 } else { 132.0 };
+    let title_size = if narrow { 14.0 } else { 16.0 };
     ui.horizontal(|ui| {
         let (badge, _) = ui.allocate_exact_size(Vec2::splat(34.0), Sense::hover());
         let p = ui.painter();
@@ -442,7 +452,8 @@ fn deck_main(
             match &info {
                 Some(t) => {
                     ui.add(
-                        egui::Label::new(RichText::new(&t.title).size(16.0).strong()).truncate(),
+                        egui::Label::new(RichText::new(&t.title).size(title_size).strong())
+                            .truncate(),
                     );
                     let artist = if t.artist.is_empty() {
                         "—"
@@ -454,19 +465,26 @@ fn deck_main(
                     );
                 }
                 None => {
-                    ui.label(
-                        RichText::new("No track loaded")
-                            .size(16.0)
-                            .color(theme::TEXT_DIM),
+                    ui.add(
+                        egui::Label::new(
+                            RichText::new("No track loaded")
+                                .size(title_size)
+                                .color(theme::TEXT_DIM),
+                        )
+                        .truncate(),
                     );
-                    ui.label(
-                        RichText::new(match deck {
-                            DeckId::A => "Drag a track here, or select one and press Shift+Left",
-                            DeckId::B => "Drag a track here, or select one and press Shift+Right",
-                        })
-                        .small()
-                        .color(theme::TEXT_DIM),
-                    );
+                    let hint = match (deck, narrow) {
+                        (_, true) => "Drag a track here",
+                        (DeckId::A, false) => {
+                            "Drag a track here, or select one and press Shift+Left"
+                        }
+                        (DeckId::B, false) => {
+                            "Drag a track here, or select one and press Shift+Right"
+                        }
+                    };
+                    let hint = egui::Label::new(RichText::new(hint).small().color(theme::TEXT_DIM));
+                    // Wide decks have room for the hint to wrap; narrow ones keep one line.
+                    ui.add(if narrow { hint.truncate() } else { hint.wrap() });
                 }
             }
         });
@@ -474,6 +492,8 @@ fn deck_main(
             let (r, resp) = ui.allocate_exact_size(Vec2::new(screen_w, 44.0), Sense::hover());
             let p = ui.painter();
             let inner = widgets::screen(p, r);
+            // The narrow screen uses slightly smaller text so its readouts never overlap.
+            let small_size = if narrow { 10.0 } else { 11.0 };
             let key = info.as_ref().and_then(|t| t.key);
             let bpm = info.as_ref().and_then(|t| t.bpm);
             let bpm_text = bpm
@@ -483,7 +503,7 @@ fn deck_main(
                 egui::pos2(inner.right(), inner.top() - 3.0),
                 egui::Align2::RIGHT_TOP,
                 bpm_text,
-                egui::FontId::monospace(20.0),
+                egui::FontId::monospace(if narrow { 18.0 } else { 20.0 }),
                 theme::TEXT,
             );
             p.text(
@@ -498,7 +518,7 @@ fn deck_main(
                 egui::pos2(inner.left(), inner.bottom() + 2.0),
                 egui::Align2::LEFT_BOTTOM,
                 format!("KEY {key_text}"),
-                egui::FontId::proportional(11.0),
+                egui::FontId::proportional(small_size),
                 if key.is_some() {
                     theme::KEY
                 } else {
@@ -514,7 +534,7 @@ fn deck_main(
                 egui::pos2(inner.right(), inner.bottom() + 2.0),
                 egui::Align2::RIGHT_BOTTOM,
                 format!("{:+.1}%", s.pitch * 100.0),
-                egui::FontId::monospace(11.0),
+                egui::FontId::monospace(small_size),
                 pitch_col,
             );
             resp.on_hover_text(
@@ -563,6 +583,7 @@ fn deck_main(
             .grid
             .filter(|_| s.loaded)
             .map(|g| (g.grid, s.duration_secs())),
+        waveview::Marks::from_deck(s, |f| f / s.track_frames.max(1) as f64),
     );
     if let Some(frac) = ov.clicked_at {
         if s.playing {
@@ -578,10 +599,12 @@ fn deck_main(
         ov.response.on_hover_text("Click to seek");
     }
 
-    // Transport buttons and the time screen.
+    // Transport buttons and the time screen (smaller buttons on a narrow deck, so the
+    // screen keeps enough room for its readouts).
+    let button_d = if narrow { 36.0 } else { 50.0 };
     ui.add_space(4.0);
     ui.horizontal(|ui| {
-        ui.spacing_mut().item_spacing.x = 6.0;
+        ui.spacing_mut().item_spacing.x = if narrow { 4.0 } else { 6.0 };
         let paused_away = s.loaded && !s.playing && !s.at_cue();
         let cue_lit = if s.previewing || (s.loaded && !s.playing && s.at_cue()) {
             1.0
@@ -592,7 +615,7 @@ fn deck_main(
         };
         let cue_btn = widgets::transport_button(
             ui,
-            50.0,
+            button_d,
             widgets::TransportIcon::Cue,
             theme::CUE_MARKER,
             cue_lit,
@@ -618,7 +641,7 @@ fn deck_main(
         };
         let play = widgets::transport_button(
             ui,
-            50.0,
+            button_d,
             widgets::TransportIcon::PlayPause,
             theme::OK,
             play_lit,
@@ -630,6 +653,60 @@ fn deck_main(
 
         // Time screen.
         let w = ui.available_width().max(60.0);
+        let grid = app.decks[deck.index()].grid.filter(|_| s.loaded);
+        // "—" with no grid, or before the music (and so the grid) starts.
+        let (bar_text, bar_colour) = match grid.and_then(|g| g.grid.bar_beat(pos)) {
+            Some(bb) => {
+                // Beat 1 lights up, so you can feel the bar going round.
+                let colour = if bb.beat == 1 { accent } else { theme::TEXT };
+                (bb.to_string(), colour)
+            }
+            None => ("—".to_string(), theme::TEXT_DIM),
+        };
+        let remain = (s.duration_secs() - pos).max(0.0);
+        // Warn in the last 30 s, like CDJs.
+        let warn = s.loaded && s.playing && remain < 30.0;
+        let remain_colour = if warn && blink {
+            theme::DANGER
+        } else {
+            theme::TEXT_DIM
+        };
+        if narrow {
+            // Compact screen: elapsed on top, remaining and bar.beat below.
+            let (r, _) = ui.allocate_exact_size(Vec2::new(w, button_d + 8.0), Sense::hover());
+            let p = ui.painter();
+            let inner =
+                widgets::screen(p, r.shrink2(Vec2::new(0.0, 1.0))).expand2(Vec2::new(3.0, 2.0));
+            p.text(
+                inner.left_top() + Vec2::new(0.0, -3.0),
+                egui::Align2::LEFT_TOP,
+                fmt_tenths(pos),
+                egui::FontId::monospace(16.0),
+                theme::TEXT,
+            );
+            p.text(
+                inner.right_top() + Vec2::new(0.0, -2.0),
+                egui::Align2::RIGHT_TOP,
+                "BAR",
+                egui::FontId::proportional(9.0),
+                theme::TEXT_DIM,
+            );
+            p.text(
+                egui::pos2(inner.left(), inner.bottom() + 2.0),
+                egui::Align2::LEFT_BOTTOM,
+                format!("-{}", fmt_tenths(remain)),
+                egui::FontId::monospace(11.0),
+                remain_colour,
+            );
+            p.text(
+                egui::pos2(inner.right(), inner.bottom() + 2.0),
+                egui::Align2::RIGHT_BOTTOM,
+                bar_text,
+                egui::FontId::monospace(12.0),
+                bar_colour,
+            );
+            return;
+        }
         let (r, _) = ui.allocate_exact_size(Vec2::new(w, 50.0), Sense::hover());
         let p = ui.painter();
         let inner = widgets::screen(p, r.shrink2(Vec2::new(0.0, 3.0)));
@@ -655,7 +732,6 @@ fn deck_main(
             theme::TEXT_DIM,
         );
         // Bar and beat (e.g. 33.2), counted from bar 1 of the beatgrid.
-        let grid = app.decks[deck.index()].grid.filter(|_| s.loaded);
         let cx = inner.center().x + 4.0;
         p.text(
             egui::pos2(cx, inner.top() - 2.0),
@@ -664,37 +740,160 @@ fn deck_main(
             egui::FontId::proportional(9.0),
             theme::TEXT_DIM,
         );
-        // "—" with no grid, or before the music (and so the grid) starts.
-        let (text, colour) = match grid.and_then(|g| g.grid.bar_beat(pos)) {
-            Some(bb) => {
-                // Beat 1 lights up, so you can feel the bar going round.
-                let colour = if bb.beat == 1 { accent } else { theme::TEXT };
-                (bb.to_string(), colour)
-            }
-            None => ("—".to_string(), theme::TEXT_DIM),
-        };
         p.text(
             egui::pos2(cx, inner.bottom() + 2.0),
             egui::Align2::CENTER_BOTTOM,
-            text,
+            bar_text,
             egui::FontId::monospace(15.0),
-            colour,
+            bar_colour,
         );
-        let remain = (s.duration_secs() - pos).max(0.0);
-        // Warn in the last 30 s, like CDJs.
-        let warn = s.loaded && s.playing && remain < 30.0;
         p.text(
             egui::pos2(inner.right(), inner.bottom() + 2.0),
             egui::Align2::RIGHT_BOTTOM,
             format!("-{}", fmt_tenths(remain)),
             egui::FontId::monospace(15.0),
-            if warn && blink {
-                theme::DANGER
-            } else {
-                theme::TEXT_DIM
-            },
+            remain_colour,
         );
     });
+
+    ui.add_space(4.0);
+    pad_row(app, ui, deck, s);
+}
+
+/// Height of one performance pad. The pads sit in two rows, 1–4 over 5–8, like the
+/// controller's pad grid.
+const PAD_HEIGHT: f32 = 24.0;
+/// Gap between the two rows of pads (and between the CUE and LOOP switch buttons).
+const PAD_ROW_GAP: f32 = 2.0;
+
+/// Short label for a loop length: 1/4, 1/2, 1, 2 … 32.
+fn beats_label(beats: f64) -> String {
+    if beats < 1.0 {
+        format!("1/{}", (1.0 / beats).round())
+    } else {
+        format!("{beats}")
+    }
+}
+
+/// The deck's eight performance pads, with a Hot Cue / Loop switch that mirrors the
+/// controller's pad mode for this deck.
+fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
+    let mode = app.decks[deck.index()].pad_mode;
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        // Pads and the CUE/LOOP switch share one height; without this egui would pad the
+        // switch buttons and the pad rows up to its own minimum interact height.
+        ui.spacing_mut().interact_size.y = PAD_HEIGHT;
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = PAD_ROW_GAP;
+            ui.spacing_mut().button_padding = Vec2::new(2.0, 0.0);
+            for (m, label, tip) in [
+                (PadMode::HotCue, "CUE", "Pads set and jump to hot cues"),
+                (PadMode::BeatLoop, "LOOP", "Pads start beat loops"),
+            ] {
+                let on = mode == m;
+                let b = ui
+                    .add_sized(
+                        [38.0, PAD_HEIGHT],
+                        egui::Button::new(RichText::new(label).size(9.0).color(if on {
+                            theme::TEXT
+                        } else {
+                            theme::TEXT_DIM
+                        }))
+                        .selected(on)
+                        .corner_radius(3),
+                    )
+                    .on_hover_text(format!(
+                        "{tip} (on the DDJ-FLX2: SHIFT + BEAT SYNC, then a pad)"
+                    ));
+                if b.clicked() {
+                    app.set_pad_mode(deck, m);
+                }
+            }
+        });
+        let gap = ui.spacing().item_spacing.x;
+        let per_row = HOT_CUE_COUNT / 2;
+        let w = ((ui.available_width() - gap * (per_row - 1) as f32) / per_row as f32).max(14.0);
+        let size = Vec2::new(w, PAD_HEIGHT);
+        ui.vertical(|ui| {
+            ui.spacing_mut().item_spacing.y = PAD_ROW_GAP;
+            for row in 0..2 {
+                ui.horizontal(|ui| {
+                    for slot in (row * per_row..(row + 1) * per_row).map(|i| i as u8) {
+                        match mode {
+                            PadMode::HotCue => hot_cue_pad(app, ui, deck, s, slot, size),
+                            PadMode::BeatLoop => loop_pad(app, ui, deck, s, slot, size),
+                        }
+                    }
+                });
+            }
+        });
+    });
+}
+
+fn hot_cue_pad(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState, slot: u8, size: Vec2) {
+    let cue = s.hot_cues[usize::from(slot)];
+    let resp = widgets::pad(
+        ui,
+        size,
+        &(slot + 1).to_string(),
+        theme::HOT_CUE,
+        cue.is_some(),
+        s.loaded,
+    );
+    let (primary, shift) = ui.input(|i| (i.pointer.primary_down(), i.modifiers.shift));
+    let down = resp.is_pointer_button_down_on() && primary;
+    let held = &mut app.decks[deck.index()].pad_held;
+    if down && held.is_none() {
+        *held = Some(slot);
+        app.audio.send(if shift && cue.is_some() {
+            Command::ClearHotCue { deck, slot }
+        } else {
+            Command::HotCuePress { deck, slot }
+        });
+    } else if !down && *held == Some(slot) {
+        *held = None;
+        app.audio.send(Command::HotCueRelease { deck, slot });
+    }
+    if resp.secondary_clicked() && cue.is_some() {
+        app.audio.send(Command::ClearHotCue { deck, slot });
+    }
+    let n = slot + 1;
+    match cue {
+        Some(frame) => {
+            let at = fmt_tenths(frame / f64::from(s.track_rate.max(1)));
+            resp.on_hover_text(format!(
+                "Hot cue {n} at {at} · click to jump (hold to preview when paused) · \
+                 right-click or Shift+click to clear"
+            ));
+        }
+        None if s.loaded => {
+            resp.on_hover_text(format!("Set hot cue {n} at the playhead"));
+        }
+        None => {}
+    }
+}
+
+fn loop_pad(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState, slot: u8, size: Vec2) {
+    let beats = LOOP_BEATS[usize::from(slot)];
+    let active = s.active_loop.is_some_and(|l| l.beats == beats);
+    let enabled = s.loaded && s.beat_frames.is_some();
+    let label = beats_label(beats);
+    let resp = widgets::pad(ui, size, &label, theme::LOOP, active, enabled);
+    if resp.clicked() {
+        app.audio.send(Command::BeatLoop { deck, beats });
+    }
+    let unit = if beats > 1.0 { "beats" } else { "beat" };
+    if !s.loaded {
+    } else if !enabled {
+        resp.on_hover_text("Needs a BPM to loop");
+    } else if active {
+        resp.on_hover_text(format!("Exit the {label}-{unit} loop"));
+    } else if s.active_loop.is_some() {
+        resp.on_hover_text(format!("Make the loop {label} {unit} long"));
+    } else {
+        resp.on_hover_text(format!("Loop {label} {unit} from the playhead"));
+    }
 }
 
 /// Vertical pitch fader with its readout (pulling down speeds up, as on CDJs).
@@ -1439,6 +1638,7 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             theme::TEXT_DIM,
             false,
             None,
+            waveview::Marks::default(),
         );
     }
     let analysis = app
