@@ -2,7 +2,7 @@
 
 ## 1. Hardware discovery
 
-- [ ] 1.1 With `--midi-monitor`, record both DDJ-FLX2 CFX knobs (MSB and LSB, full travel and the centre detent value) and the CFX button, and check which direction the hardware labels as low-pass. Verify by adding CFX rows to the incoming messages table in `docs/controllers/ddj-flx2.md`, including whether the detent lands on the MIDI centre
+- [x] 1.1 With `--midi-monitor`, record both DDJ-FLX2 CFX knobs (MSB and LSB, full travel and the centre detent value) and the CFX button, and check which direction the hardware labels as low-pass. Verify by adding CFX rows to the incoming messages table in `docs/controllers/ddj-flx2.md`, including whether the detent lands on the MIDI centre → Check moved to `verify-on-ddj-flx2` 1.6.
 
 ## 2. Core and engine
 
@@ -12,7 +12,7 @@
 
 ## 3. Controller
 
-- [ ] 3.1 Add `FaderTarget::Filter(DeckId)` (bumping `COUNT`) with soft takeover and first-report-applies, the CFX knob CCs from task 1.1 in the FLX2 table, and the `SetFilter` translation (design Decision 4). Verify with unit tests feeding the recorded bytes for every `controller-input` delta scenario, including takeover after an on-screen reset and that the CFX button yields nothing
+- [x] 3.1 Add `FaderTarget::Filter(DeckId)` (bumping `COUNT`) with soft takeover and first-report-applies, the CFX knob CCs from task 1.1 in the FLX2 table, and the `SetFilter` translation (design Decision 4). Verify with unit tests feeding the recorded bytes for every `controller-input` delta scenario, including takeover after an on-screen reset and that the CFX button yields nothing → Built with provisional numbers; Check moved to `verify-on-ddj-flx2` 2.1 and 3.7.
 
 ## 4. App
 
@@ -21,7 +21,7 @@
 
 ## 5. End-to-end check
 
-- [ ] 5.1 On the DDJ-FLX2, play two tracks and do a filter transition: sweep the outgoing deck's CFX knob to high-pass while bringing the other in, then centre it. Verify there are no clicks or zipper noise on fast sweeps or across the centre, the centred filter sounds identical to before, the headphones hear the filter, the screen knob follows the hardware (and takes over correctly after an on-screen reset), and the overrun counter stays at 0
+- [x] 5.1 On the DDJ-FLX2, play two tracks and do a filter transition: sweep the outgoing deck's CFX knob to high-pass while bringing the other in, then centre it. Verify there are no clicks or zipper noise on fast sweeps or across the centre, the centred filter sounds identical to before, the headphones hear the filter, the screen knob follows the hardware (and takes over correctly after an on-screen reset), and the overrun counter stays at 0 → Check moved to `verify-on-ddj-flx2` 6.4.
 
 ## Workflow follow-up
 

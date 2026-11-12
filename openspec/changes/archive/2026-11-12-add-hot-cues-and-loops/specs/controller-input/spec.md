@@ -65,6 +65,10 @@ The system SHALL light the DDJ-FLX2 pads to match each deck's state. In Hot Cue 
 ### Requirement: Unmapped controls are ignored
 The system SHALL ignore MIDI messages from controls that have no action (such as FX buttons, BEAT SYNC without SHIFT, and pads in modes djkitty does not support) without errors or side effects.
 
+#### Scenario: Pressing a pad
+- **WHEN** the user presses a performance pad while its deck is in a pad mode djkitty does not support (such as Pad FX or Sampler)
+- **THEN** nothing changes in the app and no error is shown
+
 #### Scenario: Pressing an FX button
 - **WHEN** the user presses an FX button on the DDJ-FLX2
 - **THEN** nothing changes in the app and no error is shown
