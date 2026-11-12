@@ -35,6 +35,7 @@ pub struct Deck {
     active_loop: Option<ActiveLoop>,
     beat_frames: Option<f64>,
     loop_refusals: u32,
+    load_refusals: u32,
     /// After a loop wrap: the read position carrying on past the loop end, faded out
     /// over `xfade_left` more output frames.
     xfade_from: f64,
@@ -64,7 +65,8 @@ impl Deck {
         self.jog_velocity = 0.0;
         self.nudge = 0.0;
         let frames = self.frames();
-        self.hot_cues = hot_cues.map(|c| c.filter(|&p| p >= 0.0 && p < frames));
+        // Up to and including the end, where `hot_cue_press` can set one.
+        self.hot_cues = hot_cues.map(|c| c.filter(|&p| (0.0..=frames).contains(&p)));
         self.held_hot_cue = None;
         self.active_loop = None;
         self.beat_frames = None;
@@ -75,6 +77,9 @@ impl Deck {
     /// Move the playhead for a DJ action (seek, cue, hot cue). Leaving the active loop's
     /// region ends the loop.
     fn move_to(&mut self, frame: f64) {
+        if frame.is_nan() {
+            return;
+        }
         self.position = frame.clamp(0.0, self.frames());
         self.xfade_left = 0;
         if let Some(l) = self.active_loop
@@ -213,9 +218,16 @@ impl Deck {
         }
     }
 
-    /// Empty every hot cue slot. Playback is unchanged.
-    pub fn clear_hot_cues(&mut self) {
-        self.hot_cues = [None; djk_core::HOT_CUE_COUNT];
+    /// Empty every hot cue slot if the deck holds the track `token`. Playback is unchanged.
+    pub fn clear_hot_cues(&mut self, token: u64) {
+        if token == self.token {
+            self.hot_cues = [None; djk_core::HOT_CUE_COUNT];
+        }
+    }
+
+    /// Record a load refused because the deck was playing.
+    pub fn note_refused_load(&mut self) {
+        self.load_refusals = self.load_refusals.wrapping_add(1);
     }
 
     /// Set the length of one beat for the track `token` (ignored for any other track).
@@ -263,12 +275,15 @@ impl Deck {
     }
 
     pub fn set_pitch(&mut self, pitch: f32) {
+        if pitch.is_nan() {
+            return;
+        }
         self.pitch = pitch.clamp(-PITCH_RANGE, PITCH_RANGE);
     }
 
     /// Jog wheel: nudge speed while playing, move the playhead while paused.
     pub fn jog(&mut self, ticks: f32) {
-        if !self.is_loaded() {
+        if !self.is_loaded() || !ticks.is_finite() {
             return;
         }
         if self.playing {
@@ -394,6 +409,7 @@ impl Deck {
             active_loop: self.active_loop,
             beat_frames: self.beat_frames,
             loop_refusals: self.loop_refusals,
+            load_refusals: self.load_refusals,
         }
     }
 }
@@ -708,7 +724,9 @@ mod tests {
             deck.hot_cue_release(slot);
         }
         deck.play();
-        deck.clear_hot_cues();
+        deck.clear_hot_cues(2); // another track: ignored
+        assert!(deck.state().hot_cues[0].is_some());
+        deck.clear_hot_cues(1);
         let s = deck.state();
         assert!(s.hot_cues.iter().all(Option::is_none));
         assert!(s.playing);
@@ -727,6 +745,19 @@ mod tests {
         assert_eq!(s.hot_cues[0], None);
         assert_eq!(s.hot_cues[1], Some(500.0));
         assert_eq!(s.hot_cues[7], None);
+    }
+
+    #[test]
+    fn hot_cue_set_at_the_end_survives_a_reload() {
+        let mut deck = Deck::new();
+        deck.load(sine(440.0, 1_000, 1.0), 1, Default::default());
+        deck.play();
+        render_frames(&mut deck, 1_000, 2_000); // plays to the end and stops
+        deck.hot_cue_press(0);
+        let cues = deck.state().hot_cues;
+        assert_eq!(cues[0], Some(1_000.0));
+        deck.load(sine(440.0, 1_000, 1.0), 1, cues);
+        assert_eq!(deck.state().hot_cues[0], Some(1_000.0));
     }
 
     // ---- Loops

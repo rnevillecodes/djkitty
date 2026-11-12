@@ -147,11 +147,11 @@ impl Library {
     pub fn tracks(&self, query: &TrackQuery) -> Result<Vec<TrackRow>> {
         let mut stmt = self.conn.prepare_cached(&select_tracks_sql(""))?;
         let needle = query.search.trim().to_lowercase();
-        let mut rows: Vec<TrackRow> = stmt
+        // A row that fails to read is an error, not a track silently left out.
+        let mut rows = stmt
             .query_map([], track_from_row)?
-            .filter_map(|r| r.ok())
-            .filter(|r| matches_search(r, &needle))
-            .collect();
+            .collect::<rusqlite::Result<Vec<TrackRow>>>()?;
+        rows.retain(|r| matches_search(r, &needle));
         sort_tracks(&mut rows, query.sort, query.descending);
         Ok(rows)
     }
@@ -413,34 +413,46 @@ impl Library {
 
     /// Tracks that need (re-)analysis: never analysed, analysed by an older version of the
     /// analysis, or whose file changed size or modification time since. Missing files are
-    /// flagged and skipped.
+    /// flagged and skipped; files that were flagged and are back lose the flag.
     pub fn tracks_needing_analysis(&mut self) -> Result<Vec<(TrackId, PathBuf)>> {
-        type Row = (i64, String, Option<i64>, Option<i64>, Option<i64>);
+        type Row = (i64, String, bool, Option<i64>, Option<i64>, Option<i64>);
         let rows: Vec<Row> = {
             let mut stmt = self.conn.prepare(
-                "SELECT t.id, t.path, a.source_size, a.source_mtime, a.version \
+                "SELECT t.id, t.path, t.missing, a.source_size, a.source_mtime, a.version \
                  FROM tracks t LEFT JOIN analysis a ON a.track_id = t.id ORDER BY t.id",
             )?;
             stmt.query_map([], |r| {
-                Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+                Ok((
+                    r.get(0)?,
+                    r.get(1)?,
+                    r.get(2)?,
+                    r.get(3)?,
+                    r.get(4)?,
+                    r.get(5)?,
+                ))
             })?
             .collect::<rusqlite::Result<_>>()?
         };
         let mut need = Vec::new();
-        let mut missing = Vec::new();
-        for (id, path, size, mtime, version) in rows {
+        // Tracks whose `missing` flag looks wrong: gone files, and flagged files that are
+        // back (e.g. a drive plugged in again) even if unchanged and needing no analysis.
+        let mut recheck = Vec::new();
+        for (id, path, flagged_missing, size, mtime, version) in rows {
             let path = PathBuf::from(path);
             match file_stamp(&path) {
                 Ok(stamp) => {
+                    if flagged_missing {
+                        recheck.push(TrackId(id));
+                    }
                     let outdated = version.is_some_and(|v| v < crate::ANALYSIS_VERSION);
                     if size.zip(mtime) != Some(stamp) || outdated {
                         need.push((TrackId(id), path));
                     }
                 }
-                Err(_) => missing.push(TrackId(id)),
+                Err(_) => recheck.push(TrackId(id)),
             }
         }
-        self.refresh_missing(&missing)?;
+        self.refresh_missing(&recheck)?;
         Ok(need)
     }
 

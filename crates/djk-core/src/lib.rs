@@ -118,8 +118,10 @@ pub enum Command {
     HotCueRelease { deck: DeckId, slot: u8 },
     /// Empty a hot cue slot.
     ClearHotCue { deck: DeckId, slot: u8 },
-    /// Empty all of a deck's hot cue slots at once (the on-screen "Clear hot cues").
-    ClearHotCues(DeckId),
+    /// Empty all of a deck's hot cue slots at once (the on-screen "Clear hot cues"), if the
+    /// deck holds the track in `token` (ignored for any other track, so a clear sent while
+    /// a load is queued can't empty the wrong track's cues).
+    ClearHotCues { deck: DeckId, token: u64 },
     /// Length of one beat of the track in `token`, in track frames (from its beatgrid),
     /// or 0 when it has no tempo (a plain `f64` keeps `Command` small). Ignored if the deck
     /// holds another track.
@@ -190,6 +192,9 @@ pub struct DeckState {
     /// Counts beat loops refused because the track has no tempo, so the UI can say why
     /// (including for presses that came straight from the controller).
     pub loop_refusals: u32,
+    /// Counts loads refused because the deck was playing, so the UI can tell that a load
+    /// it sent to this deck did not happen.
+    pub load_refusals: u32,
 }
 
 /// A deck's active beat loop.
@@ -220,6 +225,7 @@ impl Default for DeckState {
             active_loop: None,
             beat_frames: None,
             loop_refusals: 0,
+            load_refusals: 0,
         }
     }
 }

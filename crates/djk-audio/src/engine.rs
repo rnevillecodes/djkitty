@@ -250,6 +250,7 @@ impl Engine {
         let deck = &mut self.decks[req.deck.index()];
         let retired = if deck.is_playing() {
             self.refused_loads += 1;
+            deck.note_refused_load();
             Some(req.buffer)
         } else {
             deck.load(req.buffer, req.token, req.hot_cues)
@@ -278,7 +279,9 @@ impl Engine {
                 self.decks[deck.index()].hot_cue_release(slot);
             }
             Command::ClearHotCue { deck, slot } => self.decks[deck.index()].clear_hot_cue(slot),
-            Command::ClearHotCues(deck) => self.decks[deck.index()].clear_hot_cues(),
+            Command::ClearHotCues { deck, token } => {
+                self.decks[deck.index()].clear_hot_cues(token);
+            }
             Command::SetBeatLength {
                 deck,
                 token,
@@ -287,11 +290,12 @@ impl Engine {
             Command::BeatLoop { deck, beats } => self.decks[deck.index()].beat_loop(beats),
             Command::ExitLoop(d) => self.decks[d.index()].exit_loop(),
             Command::SetChannelFader { deck, value } => {
-                mix.channel_fader[deck.index()] = value.clamp(0.0, 1.0);
+                let fader = &mut mix.channel_fader[deck.index()];
+                *fader = unit(value, *fader);
             }
-            Command::SetCrossfader(x) => mix.crossfader = x.clamp(0.0, 1.0),
-            Command::SetMasterLevel(v) => mix.master_level = v.clamp(0.0, 1.0),
-            Command::SetHeadphoneLevel(v) => mix.headphone_level = v.clamp(0.0, 1.0),
+            Command::SetCrossfader(x) => mix.crossfader = unit(x, mix.crossfader),
+            Command::SetMasterLevel(v) => mix.master_level = unit(v, mix.master_level),
+            Command::SetHeadphoneLevel(v) => mix.headphone_level = unit(v, mix.headphone_level),
             Command::SetHeadphoneCue { deck, enabled } => {
                 mix.headphone_cue[deck.index()] = enabled;
             }
@@ -299,7 +303,9 @@ impl Engine {
                 mix.headphone_cue[d.index()] = !mix.headphone_cue[d.index()];
             }
             Command::SetEq { deck, band, value } => {
-                mix.eq[deck.index()][band.index()] = value.clamp(0.0, 1.0);
+                // A NaN gain would poison the EQ's filter state for good.
+                let knob = &mut mix.eq[deck.index()][band.index()];
+                *knob = unit(value, *knob);
                 self.eqs[deck.index()].set_knobs(mix.eq[deck.index()]);
             }
             Command::SetFilter { deck, value } => {
@@ -334,6 +340,16 @@ impl Engine {
     fn publish(&mut self, now: Option<Instant>) {
         let snap = self.snapshot(now);
         self.state_out.write(snap);
+    }
+}
+
+/// A 0–1 control value, clamped; a non-finite one (which `clamp` would pass through as
+/// NaN) is ignored and `current` kept.
+fn unit(value: f32, current: f32) -> f32 {
+    if value.is_finite() {
+        value.clamp(0.0, 1.0)
+    } else {
+        current
     }
 }
 
@@ -576,5 +592,85 @@ mod tests {
         assert!(after < before * 0.05, "before {before}, after {after}");
         // The channel fader is down, so the master hears nothing either way.
         assert!(out.chunks(4).all(|f| f[0] == 0.0));
+    }
+
+    #[test]
+    fn non_finite_control_values_are_ignored() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
+        h.send(Command::Play(DeckId::A));
+        for cmd in [
+            Command::SetEq {
+                deck: DeckId::A,
+                band: djk_core::EqBand::Low,
+                value: f32::NAN,
+            },
+            Command::SetChannelFader {
+                deck: DeckId::A,
+                value: f32::NAN,
+            },
+            Command::SetCrossfader(f32::INFINITY),
+            Command::SetMasterLevel(f32::NAN),
+            Command::SetPitch {
+                deck: DeckId::A,
+                pitch: f32::NAN,
+            },
+            Command::Seek {
+                deck: DeckId::A,
+                frame: f64::NAN,
+            },
+            Command::Jog {
+                deck: DeckId::A,
+                ticks: f32::NAN,
+            },
+        ] {
+            h.send(cmd);
+        }
+        let mut out = vec![0.0; 2048 * 2];
+        for _ in 0..4 {
+            e.process(&mut out, 2, None);
+        }
+        let s = *h.state.read();
+        assert_eq!(s.mixer, djk_core::MixerState::default());
+        assert_eq!(s.decks[0].pitch, 0.0);
+        assert!(s.decks[0].position.is_finite());
+        assert!(s.master_peak[0] > 0.3, "{:?}", s.master_peak);
+    }
+
+    #[test]
+    fn refused_load_is_counted_on_its_deck() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
+        h.send(Command::Play(DeckId::A));
+        let mut out = vec![0.0; 64 * 2];
+        e.process(&mut out, 2, None);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 2);
+        e.process(&mut out, 2, None);
+        let s = *h.state.read();
+        assert_eq!(s.decks[0].load_refusals, 1);
+        assert_eq!(s.decks[1].load_refusals, 0);
+    }
+
+    #[test]
+    fn clear_hot_cues_only_hits_the_named_track() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
+        h.send(Command::HotCuePress {
+            deck: DeckId::A,
+            slot: 0,
+        });
+        h.send(Command::ClearHotCues {
+            deck: DeckId::A,
+            token: 99,
+        });
+        let mut out = vec![0.0; 64 * 2];
+        e.process(&mut out, 2, None);
+        assert!(h.state.read().decks[0].hot_cues[0].is_some());
+        h.send(Command::ClearHotCues {
+            deck: DeckId::A,
+            token: 1,
+        });
+        e.process(&mut out, 2, None);
+        assert!(h.state.read().decks[0].hot_cues[0].is_none());
     }
 }

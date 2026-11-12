@@ -15,8 +15,9 @@ use djk_library::{AnalysisRecord, Library};
 pub enum AnalysisEvent {
     /// A track's analysis was stored.
     Analysed(TrackId),
-    /// A track could not be decoded and was removed from the library.
-    Removed(TrackId, String),
+    /// A track could not be decoded. It stays in the library (with its hot cues, grid and
+    /// sets) and is tried again on the next rescan, e.g. once a copy finishes.
+    Failed(TrackId, String),
 }
 
 #[derive(Default)]
@@ -202,9 +203,10 @@ fn analyse_one(lib: &mut Library, id: TrackId, path: &Path) -> Option<AnalysisEv
             None
         }
         Err(e) => {
-            tracing::warn!("removing undecodable {}: {e}", path.display());
-            let _ = lib.remove_track(id);
-            Some(AnalysisEvent::Removed(id, e.to_string()))
+            // Never remove the track: the file may still be copying, or use a codec a
+            // later version can read, and removing it would lose the user's cues and sets.
+            tracing::warn!("cannot analyse {}: {e}", path.display());
+            Some(AnalysisEvent::Failed(id, e.to_string()))
         }
     }
 }
@@ -287,6 +289,33 @@ mod tests {
         assert_eq!(pool.rescan(&mut lib), 1);
         wait_idle(&pool);
         assert_eq!(pool.progress(), (1, 1));
+    }
+
+    #[test]
+    fn undecodable_file_stays_in_the_library() {
+        let tmp = tempfile::tempdir().unwrap();
+        let music = tmp.path().join("music");
+        let data = tmp.path().join("data");
+        std::fs::create_dir_all(&music).unwrap();
+        std::fs::copy(fixture("tone.mp3"), music.join("bad.mp3")).unwrap();
+        let mut lib = Library::open_in(&data).unwrap();
+        lib.import_folder(&music, |_| {}).unwrap();
+        let id = lib.tracks(&Default::default()).unwrap()[0].id;
+        lib.set_hot_cues(id, &[Some(1.0), None, None, None, None, None, None, None])
+            .unwrap();
+        // Replace it with something that can't be decoded (as if mid-copy).
+        std::fs::copy(fixture("corrupt.mp3"), music.join("bad.mp3")).unwrap();
+
+        let pool = AnalysisPool::start(&data, 1, || {});
+        assert_eq!(pool.rescan(&mut lib), 1);
+        wait_idle(&pool);
+        let ev = pool.try_event();
+        assert!(
+            matches!(ev, Some(AnalysisEvent::Failed(i, _)) if i == id),
+            "{ev:?}"
+        );
+        assert_eq!(lib.track_count().unwrap(), 1);
+        assert_eq!(lib.hot_cues(id).unwrap()[0], Some(1.0));
     }
 
     #[test]
