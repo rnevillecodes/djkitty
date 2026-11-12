@@ -109,6 +109,8 @@ pub enum Command {
         band: EqBand,
         value: f32,
     },
+    /// Filter knob position for a deck, 0 (full low-pass) to 1 (full high-pass), 0.5 = off.
+    SetFilter { deck: DeckId, value: f32 },
     /// Hot cue pad pressed: set an empty slot at the playhead, jump to a set one while
     /// playing, or preview from it while paused (until released).
     HotCuePress { deck: DeckId, slot: u8 },
@@ -274,6 +276,9 @@ impl EqBand {
 /// EQ knob position for 0 dB (no change).
 pub const EQ_NEUTRAL: f32 = 0.5;
 
+/// Filter knob position that leaves the sound unchanged.
+pub const FILTER_NEUTRAL: f32 = 0.5;
+
 /// Snapshot of the mixer controls.
 #[derive(Copy, Clone, Debug, PartialEq)]
 pub struct MixerState {
@@ -284,6 +289,8 @@ pub struct MixerState {
     pub headphone_cue: [bool; DECK_COUNT],
     /// EQ knob positions per deck, `[low, mid, high]`, 0 (kill) to 1 (+6 dB), centre 0 dB.
     pub eq: [[f32; 3]; DECK_COUNT],
+    /// Filter knob positions per deck, 0 (full low-pass) to 1 (full high-pass), centre off.
+    pub filter: [f32; DECK_COUNT],
 }
 
 impl Default for MixerState {
@@ -295,6 +302,7 @@ impl Default for MixerState {
             headphone_level: 0.8,
             headphone_cue: [false; DECK_COUNT],
             eq: [[EQ_NEUTRAL; 3]; DECK_COUNT],
+            filter: [FILTER_NEUTRAL; DECK_COUNT],
         }
     }
 }

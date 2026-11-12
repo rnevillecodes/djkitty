@@ -12,6 +12,7 @@ use triple_buffer::{Input, Output};
 
 use crate::deck::Deck;
 use crate::eq::Eq;
+use crate::filter::Filter;
 use crate::mixer::Mixer;
 
 /// Frames rendered per internal chunk; larger callbacks are processed in several chunks.
@@ -86,6 +87,8 @@ pub struct Engine {
     master_peak: [f32; 2],
     /// Per-deck 3-band EQ, applied before the channel fader.
     eqs: [Eq; DECK_COUNT],
+    /// Per-deck bipolar filter, applied after the EQ and before the channel fader.
+    filters: [Filter; DECK_COUNT],
 }
 
 impl Engine {
@@ -115,6 +118,7 @@ impl Engine {
             channel_peak: [0.0; DECK_COUNT],
             master_peak: [0.0; 2],
             eqs: [Eq::new(device_rate), Eq::new(device_rate)],
+            filters: [Filter::new(device_rate), Filter::new(device_rate)],
         };
         engine.publish(None);
         let handles = EngineHandles {
@@ -135,6 +139,9 @@ impl Engine {
         self.mixer.set_sample_rate(device_rate);
         for eq in &mut self.eqs {
             eq.set_sample_rate(device_rate);
+        }
+        for filter in &mut self.filters {
+            filter.set_sample_rate(device_rate);
         }
         self.publish(None);
     }
@@ -167,17 +174,20 @@ impl Engine {
         self.master_peak = [0.0; 2];
         while done < total_frames {
             let n = (total_frames - done).min(CHUNK_FRAMES);
-            for (((deck, buf), peak), eq) in self
+            for ((((deck, buf), peak), eq), filter) in self
                 .decks
                 .iter_mut()
                 .zip(self.scratch.iter_mut())
                 .zip(self.channel_peak.iter_mut())
                 .zip(self.eqs.iter_mut())
+                .zip(self.filters.iter_mut())
             {
                 let [l, r] = buf;
                 deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
-                // EQ before the channel fader, so the channel meter is post-EQ.
+                // EQ then filter, both before the channel fader, so the channel meter,
+                // master and headphone cue all hear them.
                 eq.process(&mut l[..n], &mut r[..n]);
+                filter.process(&mut l[..n], &mut r[..n]);
                 for (a, b) in l[..n].iter().zip(&r[..n]) {
                     *peak = peak.max(a.abs()).max(b.abs());
                 }
@@ -291,6 +301,15 @@ impl Engine {
             Command::SetEq { deck, band, value } => {
                 mix.eq[deck.index()][band.index()] = value.clamp(0.0, 1.0);
                 self.eqs[deck.index()].set_knobs(mix.eq[deck.index()]);
+            }
+            Command::SetFilter { deck, value } => {
+                let v = if value.is_finite() {
+                    value.clamp(0.0, 1.0)
+                } else {
+                    djk_core::FILTER_NEUTRAL
+                };
+                mix.filter[deck.index()] = v;
+                self.filters[deck.index()].set_position(v);
             }
         }
     }
@@ -505,5 +524,57 @@ mod tests {
         let s = *h.state.read();
         assert_eq!(s.decks[0].position, (CHUNK_FRAMES * 3 + 17) as f64);
         assert!(out[out.len() - 2] != 0.0);
+    }
+
+    #[test]
+    fn headphone_cue_hears_the_filter() {
+        // Deck B: a 60 Hz tone, channel fader down, cued in the headphones.
+        let (mut e, mut h) = Engine::new(48_000, 4);
+        let n = 48_000;
+        let s: Vec<f32> = (0..n)
+            .flat_map(|i| {
+                let v = (2.0 * std::f32::consts::PI * 60.0 * i as f32 / 48_000.0).sin() * 0.5;
+                [v, v]
+            })
+            .collect();
+        load(
+            &mut h,
+            DeckId::B,
+            TrackBuffer {
+                samples: Arc::from(s),
+                sample_rate: 48_000,
+            },
+            1,
+        );
+        h.send(Command::SetChannelFader {
+            deck: DeckId::B,
+            value: 0.0,
+        });
+        h.send(Command::SetHeadphoneCue {
+            deck: DeckId::B,
+            enabled: true,
+        });
+        h.send(Command::SetHeadphoneLevel(1.0));
+        h.send(Command::Play(DeckId::B));
+        let mut out = vec![0.0; 2048 * 4];
+        let hp_peak = |out: &[f32]| out.chunks(4).map(|f| f[2].abs()).fold(0.0, f32::max);
+        e.process(&mut out, 4, None);
+        let before = hp_peak(&out);
+        assert!(before > 0.2, "{before}");
+
+        h.send(Command::SetFilter {
+            deck: DeckId::B,
+            value: 1.0,
+        });
+        for _ in 0..8 {
+            e.process(&mut out, 4, None);
+        }
+        let s = *h.state.read();
+        assert_eq!(s.mixer.filter[1], 1.0);
+        assert_eq!(s.mixer.filter[0], djk_core::FILTER_NEUTRAL);
+        let after = hp_peak(&out);
+        assert!(after < before * 0.05, "before {before}, after {after}");
+        // The channel fader is down, so the master hears nothing either way.
+        assert!(out.chunks(4).all(|f| f[0] == 0.0));
     }
 }

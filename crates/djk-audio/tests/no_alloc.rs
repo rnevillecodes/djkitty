@@ -111,6 +111,14 @@ fn process_never_allocates_or_frees() {
             ticks: 3.0,
         },
         Command::SetCrossfader(0.2),
+        Command::SetFilter {
+            deck: DeckId::A,
+            value: 0.1,
+        },
+        Command::SetFilter {
+            deck: DeckId::B,
+            value: 0.9,
+        },
         Command::ToggleHeadphoneCue(DeckId::A),
         Command::CuePress(DeckId::B),
         Command::CueRelease(DeckId::B),

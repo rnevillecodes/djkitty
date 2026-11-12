@@ -5,8 +5,8 @@ use std::time::{Duration, Instant};
 
 use djk_controller::FaderTarget;
 use djk_core::{
-    Bpm, Command, DeckId, DeckState, EQ_NEUTRAL, EngineState, EqBand, HOT_CUE_COUNT, LOOP_BEATS,
-    MixerState, PITCH_RANGE, PadMode,
+    Bpm, Command, DeckId, DeckState, EQ_NEUTRAL, EngineState, EqBand, FILTER_NEUTRAL,
+    HOT_CUE_COUNT, LOOP_BEATS, MixerState, PITCH_RANGE, PadMode,
 };
 use djk_library::SortKey;
 use egui::{Align, Color32, Layout, Rect, RichText, Sense, Ui, Vec2};
@@ -1181,10 +1181,10 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
             );
         }
 
-        // EQ: HI, MID and LOW knobs (top to bottom, as on a mixer) on the outer side of
+        // EQ: HI, MID and LOW knobs (top to bottom, as on a mixer), then FILTER, on the outer side of
         // each channel, each in its waveform band colour; red when the band is killed.
         let eq_d = 30.0;
-        let eq_step = ((fader_h + 14.0) / 3.0).max(eq_d + 10.0);
+        let eq_step = ((fader_h + 14.0) / 4.0).max(eq_d + 10.0);
         for (deck, cx) in [(DeckId::A, 15.0), (DeckId::B, 155.0)] {
             for (k, band) in EqBand::ALL.into_iter().enumerate() {
                 let value = m.eq[deck.index()][band.index()];
@@ -1223,6 +1223,33 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
                 });
                 g.label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
             }
+
+            // FILTER under LOW: low-pass to the left, high-pass to the right, off at the
+            // centre. Neutral colour (it is not an EQ band); the label lights while active.
+            let value = m.filter[deck.index()];
+            let y = top + 3.0 * eq_step;
+            let mut shown = value;
+            g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
+                let (resp, new) =
+                    widgets::knob(ui, eq_d, value, FILTER_NEUTRAL, theme::TEXT, true, true);
+                if let Some(v) = new {
+                    app.audio.send(Command::SetFilter { deck, value: v });
+                    app.ui_fader(FaderTarget::Filter(deck), v);
+                }
+                shown = new.unwrap_or(value);
+                resp.on_hover_text(format!(
+                    "Deck {} filter: {} · left low-pass, right high-pass · drag up/down · \
+                     {RESET_HINT}",
+                    deck.label(),
+                    djk_audio::filter::describe(shown)
+                ));
+            });
+            let label_colour = if djk_audio::filter::is_active(shown) {
+                theme::TEXT
+            } else {
+                theme::TEXT_DIM
+            };
+            g.label(ui, cx, y + eq_d + 1.0, "FILTER", label_colour);
         }
 
         // Crossfader: exactly as wide as the columns above, with A and B either side.

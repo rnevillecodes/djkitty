@@ -250,6 +250,12 @@ pub static DDJ_FLX2: Mapping = Mapping {
         // Mixer / browser (MIDI channel 7)
         ((0xB6, 0x1F), C::Fader(F::Crossfader, Msb)),
         ((0xB6, 0x3F), C::Fader(F::Crossfader, Lsb)),
+        // CFX (filter) knobs. Provisional: the DDJ-400/FLX4 numbers, to verify on the FLX2.
+        // The CFX (Smart CFX) button is deliberately unmapped.
+        ((0xB6, 0x17), C::Fader(F::Filter(A), Msb)),
+        ((0xB6, 0x37), C::Fader(F::Filter(A), Lsb)),
+        ((0xB6, 0x18), C::Fader(F::Filter(DB), Msb)),
+        ((0xB6, 0x38), C::Fader(F::Filter(DB), Lsb)),
         ((0xB6, 0x40), C::Encoder(E::Browse)),
         ((0x96, 0x46), C::Button(B::Load(A))),
         ((0x96, 0x47), C::Button(B::Load(DB))),
@@ -423,6 +429,7 @@ fn fader_command(target: FaderTarget, value: f32) -> Command {
         F::Crossfader => Command::SetCrossfader(value),
         F::Pitch(deck) => Command::SetPitch { deck, pitch: value },
         F::Eq(deck, band) => Command::SetEq { deck, band, value },
+        F::Filter(deck) => Command::SetFilter { deck, value },
     }
 }
 
@@ -519,6 +526,53 @@ mod tests {
             panic!()
         };
         assert_eq!((deck, band), (A, High));
+    }
+
+    // CFX bytes are the provisional DDJ-400/FLX4 numbers until recorded on the FLX2.
+    #[test]
+    fn cfx_knob_fully_left_is_full_low_pass() {
+        let (mut t, _) = translator();
+        // First report applies directly (initial position report or first turn).
+        t.translate(&[0xB6, 0x17, 0x00]);
+        assert_eq!(
+            engine(t.translate(&[0xB6, 0x37, 0x00])),
+            Command::SetFilter {
+                deck: A,
+                value: 0.0
+            }
+        );
+    }
+
+    #[test]
+    fn cfx_knob_picks_up_after_an_on_screen_reset() {
+        let (mut t, values) = translator();
+        // Deck B's knob sits fully right and has been applied...
+        t.translate(&[0xB6, 0x18, 0x7F]);
+        engine(t.translate(&[0xB6, 0x38, 0x7F]));
+        // ...then the filter is reset to the centre on screen.
+        values.set_from_ui(FaderTarget::Filter(DB), djk_core::FILTER_NEUTRAL);
+        // Turning left stays ignored until the knob passes the centre...
+        for msb in [0x70u8, 0x60, 0x50, 0x44] {
+            assert_eq!(t.translate(&[0xB6, 0x18, msb]), None, "msb {msb:#x}");
+            assert_eq!(t.translate(&[0xB6, 0x38, 0x00]), None);
+        }
+        // ...then follows it.
+        let cmd = engine(t.translate(&[0xB6, 0x18, 0x30]));
+        let Command::SetFilter { deck, value } = cmd else {
+            panic!("{cmd:?}")
+        };
+        assert_eq!(deck, DB);
+        assert!(value < 0.5, "{value}");
+    }
+
+    #[test]
+    fn cfx_button_does_nothing() {
+        let (mut t, _) = translator();
+        // Smart CFX button presses (note messages on the mixer channel) are unmapped.
+        for note in [0x17u8, 0x18] {
+            assert_eq!(t.translate(&[0x96, note, 0x7F]), None);
+            assert_eq!(t.translate(&[0x96, note, 0x00]), None);
+        }
     }
 
     #[test]

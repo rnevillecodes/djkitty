@@ -38,6 +38,8 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
   again, SHIFT + any pad or right-click any pad to exit. On the DDJ-FLX2, SHIFT + BEAT SYNC
   then pad 1 or pad 3 picks the mode. Hot cues and the active loop show on the waveforms.
 - **Mixer:** channel faders, a **3-band EQ** per channel (HI/MID/LOW, +6 dB boost to full kill), a
+  **FILTER** knob per channel (left sweeps a low-pass down, right sweeps a high-pass up, off at
+  the centre; on the DDJ-FLX2 it is the CFX knob, with the Smart CFX button unused), a
   crossfader, master level, a peak limiter (no harsh
   clipping), and **headphone cue** on 4-channel devices (master on 1–2, headphones on 3–4).
 - **Controller:** Pioneer DJ / AlphaTheta **DDJ-FLX2**, with hot-plug, soft takeover and

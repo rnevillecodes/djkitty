@@ -4,6 +4,7 @@ pub mod deck;
 pub mod device;
 pub mod engine;
 pub mod eq;
+pub mod filter;
 pub mod mixer;
 pub mod output;
 

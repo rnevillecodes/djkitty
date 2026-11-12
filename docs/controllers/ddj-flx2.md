@@ -44,6 +44,8 @@ LSB CC (MSB number + 0x20).
 | EQ HI knob            | CC `0x07` MSB / `0x27` LSB          | _todo_ |
 | EQ MID knob           | CC `0x0B` MSB / `0x2B` LSB          | _todo_ |
 | EQ LOW knob           | CC `0x0F` MSB / `0x2F` LSB          | _todo_ |
+| CFX (filter) knob 1 / 2 | CC `0x17` / `0x18` MSB, `0x37` / `0x38` LSB, ch 7 (left = low-pass, centre detent = off) | _todo_: travel, detent value, and which side the FLX2 labels low-pass |
+| CFX (Smart CFX) button | unmapped: does nothing in djkitty   | _todo_: record its message |
 | Headphone cue         | note `0x54`, deck channel           | _todo_ |
 | Crossfader            | CC `0x1F` MSB / `0x3F` LSB, ch 7    | _todo_ |
 | Browse encoder        | CC `0x40`, ch 7, relative           | _todo_ |

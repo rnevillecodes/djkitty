@@ -21,10 +21,12 @@ pub enum FaderTarget {
     Pitch(DeckId),
     /// An EQ knob (absolute, so it needs pick-up too).
     Eq(DeckId, EqBand),
+    /// A filter (CFX) knob, 0 full low-pass, 0.5 off, 1 full high-pass.
+    Filter(DeckId),
 }
 
 impl FaderTarget {
-    pub const COUNT: usize = 11;
+    pub const COUNT: usize = 13;
 
     pub const fn index(self) -> usize {
         match self {
@@ -32,6 +34,7 @@ impl FaderTarget {
             FaderTarget::Crossfader => 2,
             FaderTarget::Pitch(d) => 3 + d.index(),
             FaderTarget::Eq(d, b) => 5 + d.index() * 3 + b.index(),
+            FaderTarget::Filter(d) => 11 + d.index(),
         }
     }
 
@@ -58,8 +61,10 @@ impl Default for AppValues {
     fn default() -> Self {
         let v = |x: f32| AtomicU32::new(x.to_bits());
         let eq = djk_core::EQ_NEUTRAL;
+        let filter = djk_core::FILTER_NEUTRAL;
         Self {
-            // Engine defaults: faders up, crossfader centred, pitch 0, EQ knobs centred.
+            // Engine defaults: faders up, crossfader centred, pitch 0, EQ and filter knobs
+            // centred.
             values: [
                 v(1.0),
                 v(1.0),
@@ -72,6 +77,8 @@ impl Default for AppValues {
                 v(eq),
                 v(eq),
                 v(eq),
+                v(filter),
+                v(filter),
             ],
             generations: Default::default(),
             pad_modes: Default::default(),
