@@ -191,8 +191,9 @@ fn build(
                         }
                         // The published position is the end of this block, heard after the
                         // device latency plus the block itself.
-                        e.set_output_latency((device_latency + block).as_secs_f64());
-                        e.process(data, channels, Some(now));
+                        let latency = (device_latency + block).as_secs_f64();
+                        let rendered_at = e.output_timing(now, latency, frames);
+                        e.process(data, channels, Some(rendered_at));
                     }
                     Err(_) => data.fill(0.0),
                 }
