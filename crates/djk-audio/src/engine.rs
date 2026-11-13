@@ -204,7 +204,7 @@ impl Engine {
                     *peak = peak.max(a.abs()).max(b.abs());
                 }
             }
-            let gains = self.mixer.master_gains();
+            let gains = self.mixer.block_gains();
             let chunk = &mut out[done * channels..(done + n) * channels];
             for (i, frame) in chunk.chunks_exact_mut(channels).enumerate() {
                 let decks = [
