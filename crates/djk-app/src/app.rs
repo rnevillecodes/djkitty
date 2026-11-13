@@ -124,6 +124,10 @@ pub struct DjApp {
     pub query: TrackQuery,
     pub rows: Vec<TrackRow>,
     pub rows_dirty: bool,
+    /// Re-check which listed files exist on the next reload. Set when the list itself
+    /// changes (another view, an import), not for every reload: it reads the disk once
+    /// per track.
+    check_missing: bool,
     pub selected: Option<usize>,
     pub scroll_to_selected: bool,
     pub sets: Vec<SetSummary>,
@@ -203,6 +207,7 @@ impl DjApp {
             query: TrackQuery::default(),
             rows: Vec::new(),
             rows_dirty: true,
+            check_missing: true,
             selected: None,
             scroll_to_selected: false,
             sets: Vec::new(),
@@ -300,11 +305,16 @@ impl DjApp {
         self.row_numbers = numbers;
         match rows {
             Ok(mut rows) => {
-                // Cheap missing-file check of the rows being shown.
-                let ids: Vec<TrackId> = rows.iter().map(|r| r.id).collect();
-                let changed = lib.refresh_missing(&ids).unwrap_or_default();
-                for r in rows.iter_mut().filter(|r| changed.contains(&r.id)) {
-                    r.missing = !r.missing;
+                if std::mem::take(&mut self.check_missing) {
+                    let ids: Vec<TrackId> = rows.iter().map(|r| r.id).collect();
+                    let changed: std::collections::HashSet<TrackId> = lib
+                        .refresh_missing(&ids)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    for r in rows.iter_mut().filter(|r| changed.contains(&r.id)) {
+                        r.missing = !r.missing;
+                    }
                 }
                 self.rows = rows;
             }
@@ -332,6 +342,7 @@ impl DjApp {
             self.view = view;
             self.selected = None;
             self.rows_dirty = true;
+            self.check_missing = true;
         }
     }
 
@@ -606,6 +617,7 @@ impl DjApp {
             Err(e) => self.notify(format!("Import failed: {e}")),
         }
         self.rows_dirty = true;
+        self.check_missing = true;
     }
 
     fn poll_analysis(&mut self) {
@@ -900,7 +912,9 @@ impl DjApp {
                 Some(seen) if seen != s.hot_cues => {
                     ui.seen_hot_cues = Some(s.hot_cues);
                     let id = TrackId(ui.token as i64);
-                    self.with_library(|lib| {
+                    // Straight to the library, not `with_library`: hot cues appear in
+                    // neither the track list nor the sets, so there is nothing to reload.
+                    let saved = self.library.as_mut().map(|lib| {
                         // Write only the slots this deck changed, so another deck holding
                         // the same track (with its own copy of the cues) can't undo edits
                         // made there.
@@ -916,6 +930,9 @@ impl DjApp {
                             r => r,
                         }
                     });
+                    if let Some(Err(e)) = saved {
+                        self.notify(format!("Library error: {e}"));
+                    }
                 }
                 Some(_) => {}
             }
