@@ -30,7 +30,7 @@
 ## 6. Final check
 
 - [x] 6.1 Compare the final layout dump and idle and busy screenshots at both window sizes with the baseline from 1.1. Verify the dump is identical, every `visual-style` scenario in the delta holds, deck B's orange frame and toggles are distinguishable from the waveform mids, `WARN` and the lit Cue, and `cargo fmt --check`, `cargo clippy --workspace --all-targets -- -D warnings` and `cargo test --workspace` pass. Then share the before and after screenshots with the user for a tuning pass on the surface values, sheen, frame strength and accent, raising any hue clash with them rather than changing a meaningful colour
-- [ ] 6.2 Once the user is happy, remove the `baseline/` folder (and `after/`) from the change. Verify it is gone and nothing references it
+- [x] 6.2 Once the user is happy, remove the `baseline/` folder (and `after/`) from the change. Verify it is gone and nothing references it
 
 ## Workflow follow-up
 
