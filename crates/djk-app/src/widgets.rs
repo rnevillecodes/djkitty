@@ -348,7 +348,7 @@ pub fn pad(
     // (the light no longer catches the top) rather than moving it.
     let r = f32::from(theme::R_CONTROL);
     let fill = if lit {
-        mix(theme::RAISED, colour, if pressed { 0.95 } else { 0.8 })
+        theme::lit_fill(colour, pressed)
     } else if hovered {
         theme::RAISED_HOVER
     } else {
@@ -360,7 +360,7 @@ pub fn pad(
     let ink = if !enabled {
         theme::TEXT_DIM.gamma_multiply(0.5)
     } else if lit {
-        theme::BG
+        theme::LIT_INK
     } else {
         theme::TEXT_DIM
     };
@@ -378,11 +378,12 @@ pub fn pad(
 }
 
 /// A framed button drawn as a raised, top-lit key (egui's own frame is replaced; its size
-/// and layout are unchanged). `selected` shows it pressed in, for toggle switches.
+/// and layout are unchanged). `lit` backlights it in that colour, like a lit pad, for
+/// switched-on toggles and primary actions; give its label [`theme::LIT_INK`] while lit.
 pub fn lit_button(
     ui: &mut Ui,
     enabled: bool,
-    selected: bool,
+    lit: Option<Color32>,
     button: egui::Button<'_>,
 ) -> Response {
     let background = ui.painter().add(Shape::Noop);
@@ -390,7 +391,7 @@ pub fn lit_button(
         enabled,
         button.fill(Color32::TRANSPARENT).stroke(Stroke::NONE),
     );
-    paint_lit(ui, background, &resp, enabled, selected);
+    paint_lit(ui, background, &resp, enabled, lit);
     resp
 }
 
@@ -398,12 +399,12 @@ pub fn lit_button(
 pub fn lit_button_sized(
     ui: &mut Ui,
     size: Vec2,
-    selected: bool,
+    lit: Option<Color32>,
     button: egui::Button<'_>,
 ) -> Response {
     let background = ui.painter().add(Shape::Noop);
     let resp = ui.add_sized(size, button.fill(Color32::TRANSPARENT).stroke(Stroke::NONE));
-    paint_lit(ui, background, &resp, true, selected);
+    paint_lit(ui, background, &resp, true, lit);
     resp
 }
 
@@ -414,17 +415,21 @@ fn paint_lit(
     background: egui::layers::ShapeIdx,
     resp: &Response,
     enabled: bool,
-    selected: bool,
+    lit: Option<Color32>,
 ) {
     let pressed = resp.is_pointer_button_down_on();
-    let (base, sheen) = if !enabled || pressed {
-        (theme::PANEL, 0.0)
-    } else if selected {
-        (theme::CAP, theme::SHEEN)
-    } else if resp.hovered() {
-        (theme::RAISED_HOVER, theme::SHEEN)
+    let sheen = if !enabled || pressed {
+        0.0
     } else {
-        (theme::RAISED, theme::SHEEN)
+        theme::SHEEN
+    };
+    let base = match lit {
+        _ if !enabled => theme::PANEL,
+        // Pressing darkens it (the light no longer catches the top), as on a pad.
+        Some(colour) => theme::lit_fill(colour, pressed),
+        None if pressed => theme::PANEL,
+        None if resp.hovered() => theme::RAISED_HOVER,
+        None => theme::RAISED,
     };
     ui.painter().set(
         background,

@@ -1,7 +1,7 @@
 # visual-style Specification
 
 ## Purpose
-Defines how djkitty looks: a calm, professional "studio satin" style with near-black neutral surfaces lit from above. Colour is kept for things that carry meaning, so the controls read like real DJ equipment.
+Defines how djkitty looks: a calm, professional "studio satin" style with neutral dark surfaces lit from above, stepped clearly enough that panels and controls stand out. Each deck carries its own colour as identity, across its panel, lane, toggles and mixer channel; areas shared by both decks use a single accent colour for selection and focus; and state colours (play, cue, hot cue, loop, meters, warning, danger) keep their meaning, so the controls read like real DJ equipment.
 
 ## Requirements
 
