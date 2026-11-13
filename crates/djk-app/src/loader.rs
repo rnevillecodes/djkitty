@@ -5,9 +5,9 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 
 use djk_analysis::waveform::BINS_PER_SEC;
 use djk_analysis::{Decoded, Waveform};
-use djk_core::DeckId;
+use djk_core::{DeckId, TrackId};
 
-use crate::waveview::Peaks;
+use crate::waveview::{Peaks, WaveCol};
 
 pub struct LoadJob {
     pub deck: DeckId,
@@ -84,6 +84,56 @@ impl Loader {
     }
 
     pub fn try_recv(&self) -> Option<Loaded> {
+        self.results.try_recv().ok()
+    }
+}
+
+/// Reads waveform overviews for the track details panel off the UI thread, so browsing
+/// the library never waits on the disk. Only the newest request matters: older ones still
+/// queued when the worker is free are skipped.
+pub struct OverviewLoader {
+    jobs: Sender<(TrackId, PathBuf)>,
+    results: Receiver<(TrackId, Vec<WaveCol>)>,
+}
+
+impl OverviewLoader {
+    /// Columns in a details-panel overview.
+    const COLS: usize = 400;
+
+    pub fn spawn(ctx: egui::Context) -> Self {
+        let (job_tx, job_rx) = channel::<(TrackId, PathBuf)>();
+        let (res_tx, res_rx) = channel();
+        std::thread::Builder::new()
+            .name("djk-overview".into())
+            .spawn(move || {
+                while let Ok(mut job) = job_rx.recv() {
+                    while let Ok(newer) = job_rx.try_recv() {
+                        job = newer;
+                    }
+                    let (id, path) = job;
+                    // No cache file yet (not analysed): an empty overview.
+                    let cols = Waveform::load(&path)
+                        .map(|w| crate::waveview::cols_from_bins(&w.overview(Self::COLS)))
+                        .unwrap_or_default();
+                    if res_tx.send((id, cols)).is_err() {
+                        break;
+                    }
+                    ctx.request_repaint();
+                }
+            })
+            .expect("spawn overview thread");
+        Self {
+            jobs: job_tx,
+            results: res_rx,
+        }
+    }
+
+    /// Ask for the overview stored in the waveform cache file `path`.
+    pub fn request(&self, id: TrackId, path: PathBuf) {
+        let _ = self.jobs.send((id, path));
+    }
+
+    pub fn try_recv(&self) -> Option<(TrackId, Vec<WaveCol>)> {
         self.results.try_recv().ok()
     }
 }

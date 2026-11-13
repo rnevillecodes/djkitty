@@ -13,7 +13,7 @@ use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery
 
 use crate::analysis::{AnalysisEvent, AnalysisPool};
 use crate::audio::AudioService;
-use crate::loader::{LoadJob, Loader};
+use crate::loader::{LoadJob, Loader, OverviewLoader};
 use crate::settings::Settings;
 use crate::waveview::{Peaks, WaveCol};
 
@@ -132,6 +132,9 @@ pub struct DjApp {
     pub scroll_to_selected: bool,
     pub sets: Vec<SetSummary>,
     pub details_overview: Option<(TrackId, Vec<WaveCol>)>,
+    /// The track whose overview was last asked of `overview_loader`.
+    details_requested: Option<TrackId>,
+    overview_loader: OverviewLoader,
     /// The stored analysis of the track in the details panel, read once per track (see
     /// [`DjApp::details_analysis`]).
     details_analysis: Option<(TrackId, Option<djk_library::AnalysisRecord>)>,
@@ -199,7 +202,7 @@ impl DjApp {
 
         let mut app = Self {
             audio,
-            loader: Loader::spawn(ctx),
+            loader: Loader::spawn(ctx.clone()),
             library,
             data_dir,
             pool,
@@ -215,6 +218,8 @@ impl DjApp {
             scroll_to_selected: false,
             sets: Vec::new(),
             details_overview: None,
+            details_requested: None,
+            overview_loader: OverviewLoader::spawn(ctx),
             details_analysis: None,
             renaming: None,
             new_set_name: String::new(),
@@ -496,13 +501,7 @@ impl DjApp {
             .map(|t| t.title)
             .unwrap_or_default();
         self.with_library(|lib| lib.remove_track(id));
-        if self
-            .details_overview
-            .as_ref()
-            .is_some_and(|(d, _)| *d == id)
-        {
-            self.details_overview = None;
-        }
+        self.forget_details_overview(&[id]);
         self.forget_details_analysis(&[id]);
         self.notify(format!(
             "Removed “{title}” from the library (the file is still on your disk)"
@@ -657,13 +656,7 @@ impl DjApp {
                 }
             }
         }
-        if self
-            .details_overview
-            .as_ref()
-            .is_some_and(|(id, _)| changed.contains(id))
-        {
-            self.details_overview = None;
-        }
+        self.forget_details_overview(&changed);
         self.forget_details_analysis(&changed);
     }
 
@@ -989,17 +982,31 @@ impl DjApp {
         }
     }
 
+    /// Keep the details panel's overview on the selected track. The waveform file is read
+    /// on a background thread, so the overview appears a moment after the selection moves.
     fn update_details(&mut self) {
+        while let Some((id, cols)) = self.overview_loader.try_recv() {
+            // Anything but the latest request has been overtaken.
+            if self.details_requested == Some(id) {
+                self.details_overview = Some((id, cols));
+            }
+        }
         let Some(id) = self.selected_row().map(|r| r.id) else {
             return;
         };
-        if self.details_overview.as_ref().is_none_or(|(d, _)| *d != id)
+        if self.details_requested != Some(id)
             && let Some(lib) = &self.library
         {
-            let bins = Waveform::load(&lib.waveform_path(id))
-                .map(|w| crate::waveview::cols_from_bins(&w.overview(400)))
-                .unwrap_or_default();
-            self.details_overview = Some((id, bins));
+            self.details_requested = Some(id);
+            self.overview_loader.request(id, lib.waveform_path(id));
+        }
+    }
+
+    /// Drop the details panel's overview if it is for one of `ids`, so it is read again.
+    fn forget_details_overview(&mut self, ids: &[TrackId]) {
+        if self.details_requested.is_some_and(|id| ids.contains(&id)) {
+            self.details_requested = None;
+            self.details_overview = None;
         }
     }
 }
