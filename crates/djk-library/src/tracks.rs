@@ -114,8 +114,13 @@ pub fn sort_tracks(rows: &mut [TrackRow], sort: SortKey, descending: bool) {
             (None, None) => Ordering::Equal,
         }
     }
+    fn lower(s: &str) -> impl Iterator<Item = char> + '_ {
+        s.chars().flat_map(char::to_lowercase)
+    }
+    // Compares lowercased characters as it goes, rather than building two lowercased
+    // strings for every comparison the sort makes.
     let text = |a: &str, b: &str, desc: bool| {
-        let o = a.to_lowercase().cmp(&b.to_lowercase());
+        let o = lower(a).cmp(lower(b));
         if desc { o.reverse() } else { o }
     };
     rows.sort_by(|a, b| {
