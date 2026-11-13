@@ -405,6 +405,21 @@ pub fn snap_to_transient(wf: &Waveform, t: f64, window: f64) -> f64 {
     }
 }
 
+/// Where a lane's columns fall for a view starting at `start` seconds, each column
+/// covering `secs_per_col`. Columns sit on a time grid fixed to the track (column `k`
+/// always covers `k * secs_per_col` onwards), so as the view scrolls every column keeps
+/// summarising the same slice of audio and only moves sideways. Cutting the columns from
+/// wherever the view happens to start would regroup the audio every frame and make the
+/// waveform shimmer.
+///
+/// Returns the grid index of the first column in view, and how far (in columns, 0 to 1)
+/// that column starts to the left of the view's edge.
+fn column_grid(start: f64, secs_per_col: f64) -> (f64, f32) {
+    let exact = start / secs_per_col;
+    let first = exact.floor();
+    (first, (exact - first) as f32)
+}
+
 /// Scrolling waveform lane centred on a fixed playhead.
 ///
 /// Hovering it and scrolling changes `window_secs` (zoom).
@@ -460,8 +475,12 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
 
     if let Some(p) = peaks {
         let mut mesh = Mesh::default();
-        for c in 0..cols {
-            let t0 = start + c as f64 * secs_per_col;
+        // One rectangle per column (and one spare for the part-column at the right edge).
+        mesh.reserve_triangles((cols + 1) * 2);
+        mesh.reserve_vertices((cols + 1) * 4);
+        let (first, shift) = column_grid(start, secs_per_col);
+        for c in 0..=cols {
+            let t0 = (first + c as f64) * secs_per_col;
             let t1 = t0 + secs_per_col;
             let Some(span) = p.span(t0, t1) else {
                 if t0 >= p.duration_secs() {
@@ -472,7 +491,7 @@ pub fn scrolling(ui: &mut Ui, size: Vec2, lane: &Lane, window_secs: &mut f64) ->
             let b = bands.and_then(|w| sample(w, t0, t1)).unwrap_or_default();
             // Already-played audio is dimmed.
             let dim = if t1 < position_secs { 0.5 } else { 1.0 };
-            let x0 = rect.left() + c as f32 * col_w;
+            let x0 = rect.left() + (c as f32 - shift) * col_w;
             hairline(
                 &mut mesh,
                 x0,
@@ -744,6 +763,27 @@ mod tests {
             bins_per_sec: 10,
             bins,
         }
+    }
+
+    #[test]
+    fn lane_columns_stay_on_a_fixed_time_grid() {
+        let spc = 0.004;
+        // Scrolling by less than a column keeps the same columns and slides them left.
+        let (first, shift) = column_grid(1.0, spc);
+        let (first_b, shift_b) = column_grid(1.0 + 0.25 * spc, spc);
+        assert_eq!(first, first_b);
+        assert!(
+            (shift_b - shift - 0.25).abs() < 1e-3,
+            "{shift} -> {shift_b}"
+        );
+        // Scrolling by whole columns moves along the grid without re-cutting it.
+        let (first_c, shift_c) = column_grid(1.0 + 3.0 * spc, spc);
+        assert_eq!(first_c, first + 3.0);
+        assert!((shift_c - shift).abs() < 1e-3);
+        // Before the start of the track the grid carries on to the left.
+        let (first_d, shift_d) = column_grid(-0.5 * spc, spc);
+        assert_eq!(first_d, -1.0);
+        assert!((shift_d - 0.5).abs() < 1e-3);
     }
 
     #[test]
