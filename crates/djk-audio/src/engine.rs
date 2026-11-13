@@ -190,7 +190,12 @@ impl Engine {
                 .zip(self.filters.iter_mut())
             {
                 let [l, r] = buf;
-                deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                let audible = deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                // A stopped deck whose EQ and filter have rung out stays silent: skip them.
+                if !audible && eq.is_silent() && filter.is_silent() {
+                    eq.settle();
+                    continue;
+                }
                 // EQ then filter, both before the channel fader, so the channel meter,
                 // master and headphone cue all hear them.
                 eq.process(&mut l[..n], &mut r[..n]);

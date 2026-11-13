@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::denormal::NoDenormals;
 use crate::device::device_name;
 use crate::engine::Engine;
 
@@ -186,6 +187,8 @@ fn build(
                 last_callback = Some(now);
                 match engine.try_lock() {
                     Ok(mut e) => {
+                        // Filters decaying into silence must not hit the slow denormal path.
+                        let _no_denormals = NoDenormals::enter();
                         if overrun {
                             e.note_overrun();
                         }

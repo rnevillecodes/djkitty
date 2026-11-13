@@ -2,6 +2,7 @@
 
 pub mod clock;
 pub mod deck;
+pub mod denormal;
 pub mod device;
 pub mod engine;
 pub mod eq;

@@ -137,6 +137,19 @@ impl Splitter {
         }
     }
 
+    fn is_silent(&self) -> bool {
+        [
+            &self.low,
+            &self.rest,
+            &self.mid,
+            &self.high,
+            &self.low_align_lp,
+            &self.low_align_hp,
+        ]
+        .iter()
+        .all(|f| f.0.iter().all(|b| b.z1 == 0.0 && b.z2 == 0.0))
+    }
+
     /// Split one sample into `[low, mid, high]`.
     #[inline]
     fn split(&mut self, x: f32) -> [f32; 3] {
@@ -184,6 +197,17 @@ impl Eq {
     /// gains glide to them over ~10 ms.
     pub fn set_knobs(&mut self, knobs: [f32; 3]) {
         self.targets = knobs.map(knob_gain);
+    }
+
+    /// True when no sound is left in the filters, so silence in gives silence out.
+    pub fn is_silent(&self) -> bool {
+        self.left.is_silent() && self.right.is_silent()
+    }
+
+    /// Jump the gains to the knob positions. For blocks skipped while silent, where
+    /// there is nothing to click.
+    pub fn settle(&mut self) {
+        self.gains = self.targets;
     }
 
     /// Process a block of stereo audio in place.
@@ -300,5 +324,35 @@ mod tests {
         let tail = &l[n - 2000..];
         let peak = tail.iter().fold(0.0f32, |m, v| m.max(v.abs()));
         assert!(peak < 0.01, "residual {peak}");
+    }
+
+    #[test]
+    fn settle_jumps_to_the_knob_gains() {
+        let mut eq = Eq::new(48_000);
+        eq.set_knobs([0.0, 0.5, 0.5]);
+        eq.settle();
+        assert_eq!(eq.gains, eq.targets);
+        assert_eq!(eq.gains[0], 0.0);
+    }
+
+    /// With denormals flushed (as on the audio thread), an EQ fed silence rings out to
+    /// exactly zero, so the engine can stop running it.
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn rings_out_to_silence() {
+        let _guard = crate::denormal::NoDenormals::enter();
+        let mut eq = Eq::new(48_000);
+        assert!(eq.is_silent());
+        let mut l: Vec<f32> = (0..4800).map(|i| (i as f32 * 0.05).sin() * 0.5).collect();
+        let mut r = l.clone();
+        eq.process(&mut l, &mut r);
+        assert!(!eq.is_silent());
+        let mut blocks = 0;
+        while !eq.is_silent() {
+            let (mut l, mut r) = ([0.0f32; 1024], [0.0f32; 1024]);
+            eq.process(&mut l, &mut r);
+            blocks += 1;
+            assert!(blocks < 100, "EQ never rang out");
+        }
     }
 }
