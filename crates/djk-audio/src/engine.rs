@@ -136,6 +136,8 @@ impl Engine {
     pub fn set_output(&mut self, device_rate: u32, output_channels: u16) {
         self.device_rate = device_rate;
         self.output_channels = output_channels;
+        // A new device has its own latency; start the average afresh.
+        self.output_latency = 0.0;
         self.mixer.set_sample_rate(device_rate);
         for eq in &mut self.eqs {
             eq.set_sample_rate(device_rate);
@@ -150,9 +152,20 @@ impl Engine {
         self.device_rate
     }
 
-    /// Set the measured output latency (seconds) reported in snapshots.
+    /// Feed one callback's measured output latency (seconds). The reported value is a
+    /// moving average, because per-callback timestamps jitter by a few milliseconds and
+    /// would make both the latency readout and the playhead extrapolation flicker.
     pub fn set_output_latency(&mut self, secs: f64) {
-        self.output_latency = secs;
+        /// Weight of each new sample; at ~100 callbacks/s this settles in about half a second.
+        const SMOOTHING: f64 = 0.02;
+        if !secs.is_finite() || secs < 0.0 {
+            return;
+        }
+        if self.output_latency <= 0.0 {
+            self.output_latency = secs;
+        } else {
+            self.output_latency += (secs - self.output_latency) * SMOOTHING;
+        }
     }
 
     /// Record a missed audio deadline.
@@ -672,5 +685,25 @@ mod tests {
         });
         e.process(&mut out, 2, None);
         assert!(h.state.read().decks[0].hot_cues[0].is_none());
+    }
+
+    #[test]
+    fn output_latency_is_smoothed() {
+        let (mut e, _h) = Engine::new(48_000, 2);
+        // The first sample seeds the average.
+        e.set_output_latency(0.010);
+        assert_eq!(e.snapshot(None).output_latency, 0.010);
+        // Alternating ±3 ms jitter barely moves the reported value.
+        for i in 0..200 {
+            e.set_output_latency(if i % 2 == 0 { 0.013 } else { 0.007 });
+            let l = e.snapshot(None).output_latency;
+            assert!((0.0095..=0.0105).contains(&l), "{l}");
+        }
+        // Junk is ignored; a device change starts afresh.
+        e.set_output_latency(f64::NAN);
+        assert!(e.snapshot(None).output_latency.is_finite());
+        e.set_output(44_100, 2);
+        e.set_output_latency(0.025);
+        assert_eq!(e.snapshot(None).output_latency, 0.025);
     }
 }
