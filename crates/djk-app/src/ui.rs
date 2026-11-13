@@ -139,6 +139,12 @@ fn waveform_lanes(app: &mut DjApp, ui: &mut Ui, lane_h: f32) {
             &mut app.wave_window_secs,
         );
         let rect = lane.response.rect;
+        paint_accent(
+            ui.painter(),
+            rect,
+            f32::from(theme::R_CONTROL),
+            Accent::Single(theme::deck_frame(deck)),
+        );
 
         // Dragging the lane while editing slides the grid under the waveform.
         if let Some(g) = grid
@@ -195,7 +201,7 @@ fn grid_tools(
                 let fine = ui.input(|i| i.modifiers.shift);
                 if editing {
                     // Right to left is awkward with egui; build left to right instead.
-                    if widgets::lit_button(ui, true, false, egui::Button::new("Set 1 here"))
+                    if widgets::lit_button(ui, true, None, egui::Button::new("Set 1 here"))
                         .on_hover_text(
                             "Make the beat at the playhead beat 1 of a bar \
                              (snaps to the nearest kick or transient)",
@@ -207,25 +213,25 @@ fn grid_tools(
                     }
                     let step = if fine { 0.010 } else { 0.001 };
                     let nudge_hint = "Move the whole grid by 1 ms (Shift: 10 ms)";
-                    if widgets::lit_button(ui, true, false, egui::Button::new("Earlier"))
+                    if widgets::lit_button(ui, true, None, egui::Button::new("Earlier"))
                         .on_hover_text(nudge_hint)
                         .clicked()
                     {
                         app.set_deck_grid(deck, g.nudged(-step), true);
                     }
-                    if widgets::lit_button(ui, true, false, egui::Button::new("Later"))
+                    if widgets::lit_button(ui, true, None, egui::Button::new("Later"))
                         .on_hover_text(nudge_hint)
                         .clicked()
                     {
                         app.set_deck_grid(deck, g.nudged(step), true);
                     }
-                    if widgets::lit_button(ui, true, false, egui::Button::new("÷2"))
+                    if widgets::lit_button(ui, true, None, egui::Button::new("÷2"))
                         .on_hover_text("Halve the tempo")
                         .clicked()
                     {
                         app.set_deck_grid(deck, g.with_bpm(g.bpm / 2.0, pos), true);
                     }
-                    if widgets::lit_button(ui, true, false, egui::Button::new("×2"))
+                    if widgets::lit_button(ui, true, None, egui::Button::new("×2"))
                         .on_hover_text("Double the tempo")
                         .clicked()
                     {
@@ -244,7 +250,7 @@ fn grid_tools(
                     if resp.changed() {
                         app.set_deck_grid(deck, g.with_bpm(bpm, pos), true);
                     }
-                    if widgets::lit_button(ui, stored.edited, false, egui::Button::new("Reset"))
+                    if widgets::lit_button(ui, stored.edited, None, egui::Button::new("Reset"))
                         .on_hover_text("Go back to the detected beatgrid")
                         .on_disabled_hover_text("The grid is as detected")
                         .clicked()
@@ -252,13 +258,13 @@ fn grid_tools(
                         app.reset_deck_grid(deck);
                     }
                 }
-                let chip = egui::Button::new(
-                    RichText::new("GRID").size(11.0).strong().color(if editing {
-                        theme::BG
+                let chip = egui::Button::new(RichText::new("GRID").size(11.0).strong().color(
+                    if editing {
+                        theme::LIT_INK
                     } else {
                         theme::TEXT_DIM
-                    }),
-                );
+                    },
+                ));
                 let tip = if editing {
                     "Finish editing the beatgrid"
                 } else if stored.edited {
@@ -267,11 +273,7 @@ fn grid_tools(
                     "Edit the beatgrid (as detected)"
                 };
                 // Lit in the deck's colour while editing (a state), a plain key otherwise.
-                let chip = if editing {
-                    ui.add(chip.fill(accent))
-                } else {
-                    widgets::lit_button(ui, true, false, chip)
-                };
+                let chip = widgets::lit_button(ui, true, editing.then_some(accent), chip);
                 if chip.on_hover_text(tip).clicked() {
                     let d = &mut app.decks[deck.index()];
                     d.grid_editing = !d.grid_editing;
@@ -316,9 +318,63 @@ pub fn display_position_secs(state: &EngineState, d: &DeckState, now: Instant) -
     (base + (elapsed - state.output_latency) * d.speed).clamp(0.0, d.duration_secs())
 }
 
+/// A coloured edge along the top of a panel, saying whose it is.
+#[derive(Clone, Copy)]
+enum Accent {
+    /// Shared or neutral: no edge.
+    None,
+    /// One deck's panel.
+    Single(Color32),
+    /// The mixer: deck A's colour on the left half, deck B's on the right.
+    Split(Color32, Color32),
+}
+
+/// Paint `accent` as a 2px edge just inside the top of `rect` (a panel or lane rounded by
+/// `radius`, with a 1px outline), following the rounded corners. Painted, not laid out,
+/// so nothing moves.
+fn paint_accent(painter: &egui::Painter, rect: Rect, radius: f32, accent: Accent) {
+    let edge = |colour: Color32| {
+        let inner = rect.shrink(1.0);
+        let r = (radius - 1.0).max(0.0);
+        // How far the rounded corner pulls the side in at `dy` below the top.
+        let inset = |dy: f32| {
+            if dy >= r {
+                0.0
+            } else {
+                r - (r * r - (r - dy) * (r - dy)).sqrt()
+            }
+        };
+        let steps = [2.0, 1.5, 1.0, 0.5, 0.0];
+        let mut points: Vec<egui::Pos2> = steps
+            .iter()
+            .map(|&dy| egui::pos2(inner.left() + inset(dy), inner.top() + dy))
+            .collect();
+        points.extend(
+            steps
+                .iter()
+                .rev()
+                .map(|&dy| egui::pos2(inner.right() - inset(dy), inner.top() + dy)),
+        );
+        egui::Shape::convex_polygon(points, colour, egui::Stroke::NONE)
+    };
+    match accent {
+        Accent::None => {}
+        Accent::Single(c) => {
+            painter.add(edge(c));
+        }
+        Accent::Split(a, b) => {
+            let mid = rect.center().x;
+            let (left, right) = rect.split_left_right_at_x(mid);
+            painter.with_clip_rect(left).add(edge(a));
+            painter.with_clip_rect(right).add(edge(b));
+        }
+    }
+}
+
 /// A panel: a step lighter than the window behind it, satin-lit from above (a gentle
-/// gradient and a fine highlight along the top edge) with a hairline border. No shadow.
-fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Rect {
+/// gradient and a fine highlight along the top edge) with a hairline border and, on deck
+/// panels, an accent edge in the deck's colour. No shadow.
+fn card(ui: &mut Ui, accent: Accent, add: impl FnOnce(&mut Ui)) -> Rect {
     let background = ui.painter().add(egui::Shape::Noop);
     // The frame's (invisible) 1px stroke keeps the content where it has always been.
     let rect = egui::Frame::new()
@@ -347,6 +403,7 @@ fn card(ui: &mut Ui, add: impl FnOnce(&mut Ui)) -> Rect {
             theme::HAIRLINE,
         )),
     );
+    paint_accent(ui.painter(), rect, f32::from(theme::R_PANEL), accent);
     dump("card", rect);
     rect
 }
@@ -404,7 +461,7 @@ fn deck_panel(app: &mut DjApp, ui: &mut Ui, deck: DeckId) {
     let s = *state.deck(deck);
     let now = Instant::now();
     let blink = (app.start_time.elapsed().as_millis() / 500).is_multiple_of(2);
-    let rect = card(ui, |ui| {
+    let rect = card(ui, Accent::Single(theme::deck_frame(deck)), |ui| {
         let full = ui.available_rect_before_wrap();
         let pitch_w = 58.0;
         let main = Rect::from_min_max(
@@ -488,8 +545,13 @@ fn deck_main(
             match &info {
                 Some(t) => {
                     ui.add(
-                        egui::Label::new(RichText::new(&t.title).size(title_size).strong())
-                            .truncate(),
+                        egui::Label::new(
+                            RichText::new(&t.title)
+                                .size(title_size)
+                                .strong()
+                                .color(accent),
+                        )
+                        .truncate(),
                     );
                     let artist = if t.artist.is_empty() {
                         "—"
@@ -824,6 +886,7 @@ fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
                 (PadMode::BeatLoop, "LOOP", "Pads start beat loops"),
             ] {
                 let on = mode == m;
+                let lit = on.then_some(theme::deck_colour(deck));
                 let extra = if m == PadMode::HotCue && s.loaded {
                     " · right-click to clear all hot cues"
                 } else {
@@ -832,9 +895,9 @@ fn pad_row(app: &mut DjApp, ui: &mut Ui, deck: DeckId, s: &DeckState) {
                 let b = widgets::lit_button_sized(
                     ui,
                     Vec2::new(38.0, PAD_HEIGHT),
-                    on,
+                    lit,
                     egui::Button::new(RichText::new(label).size(9.0).color(if on {
-                        theme::TEXT
+                        theme::LIT_INK
                     } else {
                         theme::TEXT_DIM
                     })),
@@ -1063,7 +1126,7 @@ fn levels_panel(app: &mut DjApp, ui: &mut Ui) {
     let m = state.mixer;
     let defaults = MixerState::default();
     let phones_ok = state.headphones_available();
-    card(ui, |ui| {
+    card(ui, Accent::None, |ui| {
         let full = ui.available_rect_before_wrap();
         let lay = StripLayout::new(full.height());
         let d = 38.0;
@@ -1112,7 +1175,7 @@ fn levels_panel(app: &mut DjApp, ui: &mut Ui) {
 /// The master output meter (left and right), in its own panel right of the mixer.
 fn master_panel(app: &mut DjApp, ui: &mut Ui) {
     let meters = app.meters;
-    card(ui, |ui| {
+    card(ui, Accent::None, |ui| {
         let full = ui.available_rect_before_wrap();
         let lay = StripLayout::new(full.height());
         let w = 16.0;
@@ -1137,160 +1200,172 @@ fn mixer_strip(app: &mut DjApp, ui: &mut Ui) {
     let m = state.mixer;
     let defaults = MixerState::default();
     let meters = app.meters;
-    let rect = card(ui, |ui| {
-        let full = ui.available_rect_before_wrap();
-        // Columns, left to right: deck A EQ, A meter, A fader, B fader, B meter, deck B EQ.
-        let content_w = 170.0;
-        let g = Grid::centred(full, content_w);
-        let lay = StripLayout::new(full.height());
-        let (top, fader_h) = (lay.top, lay.fader_h);
+    let rect = card(
+        ui,
+        Accent::Split(theme::deck_frame(DeckId::A), theme::deck_frame(DeckId::B)),
+        |ui| {
+            let full = ui.available_rect_before_wrap();
+            // Columns, left to right: deck A EQ, A meter, A fader, B fader, B meter, deck B EQ.
+            let content_w = 170.0;
+            let g = Grid::centred(full, content_w);
+            let lay = StripLayout::new(full.height());
+            let (top, fader_h) = (lay.top, lay.fader_h);
 
-        // Channel faders with their meters (headphone cue is on the 1/2 keys and the
-        // controller).
-        for (deck, fx, mx) in [(DeckId::A, 48.0, 38.0), (DeckId::B, 92.0, 130.0)] {
-            let i = deck.index();
-            widgets::meter(
-                ui.painter(),
-                g.at(mx, top + 2.0, 6.0, fader_h - 4.0),
-                meters[i],
-            );
-            g.place(ui, g.at(fx, top, 34.0, fader_h), |ui| {
-                let (resp, new) = widgets::fader(
-                    ui,
-                    Vec2::new(34.0, fader_h),
-                    true,
-                    false,
-                    m.channel_fader[i],
-                    defaults.channel_fader[i],
-                    widgets::FaderStyle {
-                        accent: theme::deck_colour(deck),
-                        ticks: 11,
-                        centre_detent: false,
-                        fill: true,
-                    },
+            // Channel faders with their meters (headphone cue is on the 1/2 keys and the
+            // controller).
+            for (deck, fx, mx) in [(DeckId::A, 48.0, 38.0), (DeckId::B, 92.0, 130.0)] {
+                let i = deck.index();
+                widgets::meter(
+                    ui.painter(),
+                    g.at(mx, top + 2.0, 6.0, fader_h - 4.0),
+                    meters[i],
                 );
-                if let Some(v) = new {
-                    app.audio.send(Command::SetChannelFader { deck, value: v });
-                    app.ui_fader(FaderTarget::Channel(deck), v);
-                }
-                resp.on_hover_text(format!("Channel {} · {RESET_HINT}", deck.label()));
-            });
-            g.label(
-                ui,
-                fx + 17.0,
-                top + fader_h + 3.0,
-                deck.label(),
-                theme::deck_colour(deck),
-            );
-        }
-
-        // EQ: HI, MID and LOW knobs (top to bottom, as on a mixer), then FILTER, on the outer side of
-        // each channel, each in its waveform band colour; red when the band is killed.
-        let eq_d = 30.0;
-        let eq_step = ((fader_h + 14.0) / 4.0).max(eq_d + 10.0);
-        for (deck, cx) in [(DeckId::A, 15.0), (DeckId::B, 155.0)] {
-            for (k, band) in EqBand::ALL.into_iter().enumerate() {
-                let value = m.eq[deck.index()][band.index()];
-                let colour = if value <= 0.001 {
-                    theme::DANGER
-                } else {
-                    match band {
-                        EqBand::High => theme::BAND_HIGH,
-                        EqBand::Mid => theme::BAND_MID,
-                        EqBand::Low => theme::BAND_LOW,
-                    }
-                };
-                let y = top + k as f32 * eq_step;
-                g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
-                    let (resp, new) =
-                        widgets::knob(ui, eq_d, value, EQ_NEUTRAL, colour, true, true);
+                g.place(ui, g.at(fx, top, 34.0, fader_h), |ui| {
+                    let (resp, new) = widgets::fader(
+                        ui,
+                        Vec2::new(34.0, fader_h),
+                        true,
+                        false,
+                        m.channel_fader[i],
+                        defaults.channel_fader[i],
+                        widgets::FaderStyle {
+                            accent: theme::deck_colour(deck),
+                            ticks: 11,
+                            centre_detent: false,
+                            fill: true,
+                        },
+                    );
                     if let Some(v) = new {
-                        app.audio.send(Command::SetEq {
-                            deck,
-                            band,
-                            value: v,
-                        });
-                        app.ui_fader(FaderTarget::Eq(deck, band), v);
+                        app.audio.send(Command::SetChannelFader { deck, value: v });
+                        app.ui_fader(FaderTarget::Channel(deck), v);
                     }
-                    let shown = new.unwrap_or(value);
-                    let db = match djk_audio::eq::knob_db(shown) {
-                        None => "kill".to_string(),
-                        Some(db) if db.abs() < 0.05 => "0 dB".to_string(),
-                        Some(db) => format!("{db:+.1} dB"),
+                    resp.on_hover_text(format!("Channel {} · {RESET_HINT}", deck.label()));
+                });
+                g.label(
+                    ui,
+                    fx + 17.0,
+                    top + fader_h + 3.0,
+                    deck.label(),
+                    theme::deck_colour(deck),
+                );
+            }
+
+            // EQ: HI, MID and LOW knobs (top to bottom, as on a mixer), then FILTER, on the outer side of
+            // each channel, each in its waveform band colour; red when the band is killed.
+            let eq_d = 30.0;
+            let eq_step = ((fader_h + 14.0) / 4.0).max(eq_d + 10.0);
+            for (deck, cx) in [(DeckId::A, 15.0), (DeckId::B, 155.0)] {
+                for (k, band) in EqBand::ALL.into_iter().enumerate() {
+                    let value = m.eq[deck.index()][band.index()];
+                    let colour = if value <= 0.001 {
+                        theme::DANGER
+                    } else {
+                        match band {
+                            EqBand::High => theme::BAND_HIGH,
+                            EqBand::Mid => theme::BAND_MID,
+                            EqBand::Low => theme::BAND_LOW,
+                        }
                     };
+                    let y = top + k as f32 * eq_step;
+                    g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
+                        let (resp, new) =
+                            widgets::knob(ui, eq_d, value, EQ_NEUTRAL, colour, true, true);
+                        if let Some(v) = new {
+                            app.audio.send(Command::SetEq {
+                                deck,
+                                band,
+                                value: v,
+                            });
+                            app.ui_fader(FaderTarget::Eq(deck, band), v);
+                        }
+                        let shown = new.unwrap_or(value);
+                        let db = match djk_audio::eq::knob_db(shown) {
+                            None => "kill".to_string(),
+                            Some(db) if db.abs() < 0.05 => "0 dB".to_string(),
+                            Some(db) => format!("{db:+.1} dB"),
+                        };
+                        resp.on_hover_text(format!(
+                            "Deck {} {} EQ: {db} · drag up/down · {RESET_HINT}",
+                            deck.label(),
+                            band.label()
+                        ));
+                    });
+                    g.label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
+                }
+
+                // FILTER under LOW: low-pass to the left, high-pass to the right, off at the
+                // centre. In the deck's colour (it is not an EQ band); the label lights while
+                // active.
+                let value = m.filter[deck.index()];
+                let y = top + 3.0 * eq_step;
+                let mut shown = value;
+                g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
+                    let (resp, new) = widgets::knob(
+                        ui,
+                        eq_d,
+                        value,
+                        FILTER_NEUTRAL,
+                        theme::deck_colour(deck),
+                        true,
+                        true,
+                    );
+                    if let Some(v) = new {
+                        app.audio.send(Command::SetFilter { deck, value: v });
+                        app.ui_fader(FaderTarget::Filter(deck), v);
+                    }
+                    shown = new.unwrap_or(value);
                     resp.on_hover_text(format!(
-                        "Deck {} {} EQ: {db} · drag up/down · {RESET_HINT}",
+                        "Deck {} filter: {} · left low-pass, right high-pass · drag up/down · \
+                     {RESET_HINT}",
                         deck.label(),
-                        band.label()
+                        djk_audio::filter::describe(shown)
                     ));
                 });
-                g.label(ui, cx, y + eq_d + 1.0, band.label(), theme::TEXT_DIM);
+                let label_colour = if djk_audio::filter::is_active(shown) {
+                    theme::TEXT
+                } else {
+                    theme::TEXT_DIM
+                };
+                g.label(ui, cx, y + eq_d + 1.0, "FILTER", label_colour);
             }
 
-            // FILTER under LOW: low-pass to the left, high-pass to the right, off at the
-            // centre. Neutral colour (it is not an EQ band); the label lights while active.
-            let value = m.filter[deck.index()];
-            let y = top + 3.0 * eq_step;
-            let mut shown = value;
-            g.place(ui, g.at(cx - eq_d / 2.0, y, eq_d, eq_d), |ui| {
-                let (resp, new) =
-                    widgets::knob(ui, eq_d, value, FILTER_NEUTRAL, theme::TEXT, true, true);
-                if let Some(v) = new {
-                    app.audio.send(Command::SetFilter { deck, value: v });
-                    app.ui_fader(FaderTarget::Filter(deck), v);
+            // Crossfader: exactly as wide as the columns above, with A and B either side.
+            let xf = g.at(0.0, lay.xf_top, content_w, lay.xf_h);
+            for (x, text, colour) in [
+                (xf.left() - 9.0, "A", theme::DECK_A),
+                (xf.right() + 9.0, "B", theme::DECK_B),
+            ] {
+                ui.painter().text(
+                    egui::pos2(x, xf.center().y),
+                    egui::Align2::CENTER_CENTER,
+                    text,
+                    egui::FontId::proportional(12.0),
+                    colour,
+                );
+            }
+            g.place(ui, xf, |ui| {
+                let (resp, new) = widgets::fader(
+                    ui,
+                    xf.size(),
+                    false,
+                    false,
+                    m.crossfader,
+                    defaults.crossfader,
+                    widgets::FaderStyle {
+                        accent: theme::TEXT,
+                        ticks: 11,
+                        centre_detent: true,
+                        fill: false,
+                    },
+                );
+                if let Some(x) = new {
+                    app.audio.send(Command::SetCrossfader(x));
+                    app.ui_fader(FaderTarget::Crossfader, x);
                 }
-                shown = new.unwrap_or(value);
-                resp.on_hover_text(format!(
-                    "Deck {} filter: {} · left low-pass, right high-pass · drag up/down · \
-                     {RESET_HINT}",
-                    deck.label(),
-                    djk_audio::filter::describe(shown)
-                ));
+                resp.on_hover_text(format!("Crossfader · {RESET_HINT}"));
             });
-            let label_colour = if djk_audio::filter::is_active(shown) {
-                theme::TEXT
-            } else {
-                theme::TEXT_DIM
-            };
-            g.label(ui, cx, y + eq_d + 1.0, "FILTER", label_colour);
-        }
-
-        // Crossfader: exactly as wide as the columns above, with A and B either side.
-        let xf = g.at(0.0, lay.xf_top, content_w, lay.xf_h);
-        for (x, text, colour) in [
-            (xf.left() - 9.0, "A", theme::DECK_A),
-            (xf.right() + 9.0, "B", theme::DECK_B),
-        ] {
-            ui.painter().text(
-                egui::pos2(x, xf.center().y),
-                egui::Align2::CENTER_CENTER,
-                text,
-                egui::FontId::proportional(12.0),
-                colour,
-            );
-        }
-        g.place(ui, xf, |ui| {
-            let (resp, new) = widgets::fader(
-                ui,
-                xf.size(),
-                false,
-                false,
-                m.crossfader,
-                defaults.crossfader,
-                widgets::FaderStyle {
-                    accent: theme::TEXT,
-                    ticks: 11,
-                    centre_detent: true,
-                    fill: false,
-                },
-            );
-            if let Some(x) = new {
-                app.audio.send(Command::SetCrossfader(x));
-                app.ui_fader(FaderTarget::Crossfader, x);
-            }
-            resp.on_hover_text(format!("Crossfader · {RESET_HINT}"));
-        });
-    });
+        },
+    );
     // Dropping a track on the mixer loads the deck on that side.
     let mid_x = rect.center().x;
     track_drop_target(app, ui, rect, |p| {
@@ -1312,7 +1387,7 @@ fn sidebar(app: &mut DjApp, ui: &mut Ui) {
             let plus = widgets::lit_button(
                 ui,
                 true,
-                false,
+                None,
                 egui::Button::image_and_text(
                     widgets::icon(widgets::icons::PLUS, 11.0, theme::TEXT),
                     RichText::new("Add").size(11.0),
@@ -1473,14 +1548,18 @@ fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
         }
         ui.add_space(12.0);
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            // The default action is the brighter key (neutral: deck colours mean decks).
-            let save =
-                egui::Button::new(RichText::new("Create").strong()).min_size(Vec2::new(80.0, 28.0));
-            if widgets::lit_button(ui, valid, true, save).clicked() {
+            // The default action is lit in the app accent once it can be taken (dialogs
+            // belong to neither deck).
+            let mut label = RichText::new("Create").strong();
+            if valid {
+                label = label.color(theme::LIT_INK);
+            }
+            let save = egui::Button::new(label).min_size(Vec2::new(80.0, 28.0));
+            if widgets::lit_button(ui, valid, Some(theme::ACCENT), save).clicked() {
                 create = true;
             }
             let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
-            if widgets::lit_button(ui, true, false, cancel).clicked() {
+            if widgets::lit_button(ui, true, None, cancel).clicked() {
                 close = true;
             }
         });
@@ -1543,7 +1622,7 @@ fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
                 remove = true;
             }
             let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
-            if widgets::lit_button(ui, true, false, cancel).clicked() {
+            if widgets::lit_button(ui, true, None, cancel).clicked() {
                 close = true;
             }
         });
@@ -1595,7 +1674,7 @@ fn clear_cues_dialog(app: &mut DjApp, ctx: &egui::Context) {
                 clear = true;
             }
             let cancel = egui::Button::new("Cancel").min_size(Vec2::new(80.0, 28.0));
-            if widgets::lit_button(ui, true, false, cancel).clicked() {
+            if widgets::lit_button(ui, true, None, cancel).clicked() {
                 close = true;
             }
         });
@@ -1647,19 +1726,19 @@ fn truncated(
 }
 
 /// A set row: playlist icon tile, title and optional subtitle, with hover and selected
-/// states (selected rows are a lit key with a light marker bar; all neutral, since colour
-/// is kept for decks).
+/// states (the selected row is tinted in the app accent, with an accent marker bar and an
+/// accent-lit icon tile; the sidebar belongs to neither deck).
 fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) -> egui::Response {
     let h = if subtitle.is_some() { 44.0 } else { 34.0 };
     let (rect, resp) = ui.allocate_exact_size(Vec2::new(ui.available_width(), h), Sense::click());
     let p = ui.painter();
     let r = f32::from(theme::R_CONTROL);
     if selected {
-        sheen::raised(p, rect, r, theme::RAISED_HOVER, theme::SHEEN);
+        p.rect_filled(rect, r, theme::selected_fill());
         p.rect_filled(
             Rect::from_min_size(rect.min + Vec2::new(0.0, 8.0), Vec2::new(2.0, h - 16.0)),
             1,
-            theme::TEXT,
+            theme::ACCENT,
         );
     } else if resp.hovered() {
         p.rect_filled(rect, r, theme::RAISED);
@@ -1671,7 +1750,7 @@ fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) ->
         Vec2::splat(24.0),
     );
     let ink = if selected {
-        theme::TEXT
+        theme::LIT_INK
     } else {
         theme::TEXT_DIM
     };
@@ -1679,7 +1758,11 @@ fn list_row(ui: &mut Ui, selected: bool, title: &str, subtitle: Option<&str>) ->
         p,
         tile,
         r,
-        if selected { theme::CAP } else { theme::RAISED },
+        if selected {
+            theme::lit_fill(theme::ACCENT, false)
+        } else {
+            theme::RAISED
+        },
         theme::SHEEN,
     );
     let c = tile.center();
@@ -2032,6 +2115,9 @@ enum RowAction {
 }
 
 fn track_table(app: &mut DjApp, ui: &mut Ui) {
+    // egui inks a selected row's text in the selection stroke colour, which is the accent
+    // (for focused fields); keep row text in its own colours on the accent tint.
+    ui.visuals_mut().selection.stroke.color = theme::TEXT;
     let in_set = matches!(app.view, View::Set(_));
     // Rows can be dragged to reorder only while the whole set shows in its own order.
     let can_reorder = in_set && app.set_track_filter.trim().is_empty() && app.set_in_own_order();
@@ -2404,7 +2490,7 @@ fn import_button(app: &mut DjApp, ui: &mut Ui) {
         let arrow = widgets::lit_button(
             ui,
             true,
-            false,
+            None,
             egui::Button::image(widgets::icon(
                 widgets::icons::CHEVRON_DOWN,
                 16.0,
@@ -2430,7 +2516,7 @@ fn import_button(app: &mut DjApp, ui: &mut Ui) {
         let main = widgets::lit_button(
             ui,
             true,
-            false,
+            None,
             egui::Button::new("Import").min_size(Vec2::new(0.0, height)),
         )
         .on_hover_text("Import audio files");
@@ -2502,7 +2588,7 @@ fn status_bar(app: &mut DjApp, ui: &mut Ui) {
         if combo.response.clicked() {
             app.refresh_devices();
         }
-        if lost && widgets::lit_button(ui, true, false, egui::Button::new("Reconnect")).clicked() {
+        if lost && widgets::lit_button(ui, true, None, egui::Button::new("Reconnect")).clicked() {
             reconnect = true;
         }
         if let Some(out) = &app.audio.output {
@@ -2535,8 +2621,7 @@ fn status_bar(app: &mut DjApp, ui: &mut Ui) {
         };
 
         ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-            if widgets::lit_button(ui, true, false, egui::Button::new("Shortcuts").small())
-                .clicked()
+            if widgets::lit_button(ui, true, None, egui::Button::new("Shortcuts").small()).clicked()
             {
                 app.show_shortcuts = !app.show_shortcuts;
             }

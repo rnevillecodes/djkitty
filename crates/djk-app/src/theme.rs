@@ -12,36 +12,36 @@ use djk_core::DeckId;
 // ---- Surfaces (neutral, no tint)
 
 /// Recessed wells: readout screens, waveform lanes, fader slots, meters, text fields.
-pub const WELL: Color32 = Color32::from_rgb(0x08, 0x09, 0x0a);
+pub const WELL: Color32 = Color32::from_rgb(0x05, 0x06, 0x07);
 /// The window: library, status bar, and behind the deck and mixer panels.
-pub const BG: Color32 = Color32::from_rgb(0x0d, 0x0e, 0x10);
+pub const BG: Color32 = Color32::from_rgb(0x08, 0x09, 0x0a);
 /// Panels: decks, mixer, sidebar, track details, dialogs.
-pub const PANEL: Color32 = Color32::from_rgb(0x17, 0x18, 0x1b);
+pub const PANEL: Color32 = Color32::from_rgb(0x1e, 0x20, 0x24);
 /// Raised controls: buttons, pads, fader and knob caps.
-pub const RAISED: Color32 = Color32::from_rgb(0x22, 0x24, 0x28);
+pub const RAISED: Color32 = Color32::from_rgb(0x30, 0x33, 0x38);
 /// Raised controls under the pointer, and selected rows.
-pub const RAISED_HOVER: Color32 = Color32::from_rgb(0x2d, 0x2f, 0x34);
+pub const RAISED_HOVER: Color32 = Color32::from_rgb(0x3b, 0x3e, 0x44);
 /// Dividers, table lines and neutral borders.
-pub const HAIRLINE: Color32 = Color32::from_rgb(0x2b, 0x2d, 0x31);
+pub const HAIRLINE: Color32 = Color32::from_rgb(0x38, 0x3b, 0x41);
 /// Fader and knob caps: a step above [`RAISED`] so they stand out on their panel.
-pub const CAP: Color32 = Color32::from_rgb(0x36, 0x38, 0x3d);
+pub const CAP: Color32 = Color32::from_rgb(0x44, 0x47, 0x4d);
 /// Caps under the pointer or being dragged.
-pub const CAP_HOT: Color32 = Color32::from_rgb(0x44, 0x47, 0x4d);
+pub const CAP_HOT: Color32 = Color32::from_rgb(0x52, 0x55, 0x5c);
 /// Grip grooves cut into caps, and other fine dark details.
 pub const GROOVE: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 100);
 /// The caution band of level meters (between OK green and danger red).
 pub const METER_HOT: Color32 = Color32::from_rgb(0xf5, 0xd0, 0x3c);
 /// Unlit LED segments and rings: present but clearly off.
-pub const LED_OFF: Color32 = Color32::from_rgb(0x1c, 0x1d, 0x20);
+pub const LED_OFF: Color32 = Color32::from_rgb(0x25, 0x27, 0x2b);
 
 // ---- Light
 
 /// The 1px highlight along the top edge of a raised surface.
-pub const EDGE_LIGHT: Color32 = Color32::from_rgba_premultiplied(18, 18, 18, 18);
+pub const EDGE_LIGHT: Color32 = Color32::from_rgba_premultiplied(41, 41, 41, 41);
 /// The dark outline and bottom edge of a raised surface.
 pub const EDGE_DARK: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 150);
 /// How much lighter (0–1, towards white) a raised surface is at its top than its bottom.
-pub const SHEEN: f32 = 0.05;
+pub const SHEEN: f32 = 0.08;
 /// Shadow along the inner top edge of a recessed well.
 pub const WELL_SHADOW: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 110);
 /// Faint light catching the bottom lip of a well.
@@ -53,7 +53,7 @@ pub const OVERLAY: Color32 = Color32::from_rgba_premultiplied(0, 0, 0, 200);
 /// The glass reflection over readout screens.
 pub const GLASS: Color32 = Color32::from_rgba_premultiplied(7, 7, 7, 7);
 /// A much gentler sheen for large panels, so they read as satin rather than buttons.
-pub const PANEL_SHEEN: f32 = 0.015;
+pub const PANEL_SHEEN: f32 = 0.025;
 
 // ---- Shape
 
@@ -66,9 +66,9 @@ pub const R_CONTROL: u8 = 3;
 
 pub const TEXT: Color32 = Color32::from_rgb(0xe8, 0xe9, 0xeb);
 /// Labels and secondary text.
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x9b, 0x9f, 0xa7);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0xa9, 0xad, 0xb5);
 /// Section headings and column headers: brighter than labels, softer than content.
-pub const HEADING: Color32 = Color32::from_rgb(0xc9, 0xcc, 0xd1);
+pub const HEADING: Color32 = Color32::from_rgb(0xd3, 0xd6, 0xdb);
 
 // ---- Meaning (unchanged hues)
 
@@ -89,6 +89,17 @@ pub const BAND_HIGH: Color32 = Color32::from_rgb(0x96, 0xe6, 0xc2); // mint
 /// Musical key readouts.
 pub const KEY: Color32 = Color32::from_rgb(0xb7, 0x8c, 0xff);
 
+/// The app accent: selection and focus in areas shared by both decks (library, sidebar,
+/// dialogs), never inside the decks or the mixer. A bluer violet than [`KEY`], which is
+/// only ever text, so the two roles stay apart.
+pub const ACCENT: Color32 = Color32::from_rgb(0x9c, 0x7e, 0xff);
+
+/// The background of a selected row (library table, sidebar sets) and selected text: a
+/// low-strength [`ACCENT`] tint on the window.
+pub fn selected_fill() -> Color32 {
+    crate::widgets::mix(BG, ACCENT, 0.2)
+}
+
 pub const PLAYHEAD: Color32 = Color32::from_rgb(0xff, 0xff, 0xff);
 pub const CUE_MARKER: Color32 = Color32::from_rgb(0xff, 0xd2, 0x3f);
 /// Hot cue pads and markers.
@@ -102,6 +113,22 @@ pub fn deck_colour(deck: DeckId) -> Color32 {
         DeckId::B => DECK_B,
     }
 }
+
+/// The accent edge along the top of a deck's panels and lane: the deck colour muted
+/// towards the panel, so full strength stays for its lit toggles, tag and title, and deck
+/// B's frame doesn't read as the waveform mids or a warning.
+pub fn deck_frame(deck: DeckId) -> Color32 {
+    crate::widgets::mix(PANEL, deck_colour(deck), 0.7)
+}
+
+/// The fill of a control lit in `colour` (pads, switched-on toggles, primary buttons):
+/// backlit in its colour over the raised surface, a little deeper while pressed.
+pub fn lit_fill(colour: Color32, pressed: bool) -> Color32 {
+    crate::widgets::mix(RAISED, colour, if pressed { 0.95 } else { 0.8 })
+}
+
+/// Labels and icons on a [`lit_fill`].
+pub const LIT_INK: Color32 = BG;
 
 /// Glyph scale for Inter, chosen so its rows are as tall as egui's default UI font (within
 /// 1/32 pt, egui's rounding step) at every size we use, so swapping the font moves nothing.
@@ -166,12 +193,13 @@ pub fn apply(ctx: &egui::Context) {
     // Text fields and scroll tracks read as recessed wells.
     v.extreme_bg_color = WELL;
     v.text_edit_bg_color = Some(WELL);
-    v.faint_bg_color = Color32::from_rgb(0x12, 0x13, 0x15);
+    v.faint_bg_color = Color32::from_rgb(0x13, 0x14, 0x17);
     v.code_bg_color = WELL;
     v.override_text_color = Some(TEXT);
-    // Neutral selection: colour stays for things that mean something.
-    v.selection.bg_fill = Color32::from_rgb(0x3a, 0x3d, 0x43);
-    v.selection.stroke = Stroke::new(1.0, TEXT);
+    // Selection and focus outside the decks use the app accent: a tinted row or text
+    // selection, and an accent outline on focused fields.
+    v.selection.bg_fill = selected_fill();
+    v.selection.stroke = Stroke::new(1.0, ACCENT);
     v.hyperlink_color = HEADING;
     let radius = CornerRadius::same(R_CONTROL);
     for w in [
@@ -191,10 +219,10 @@ pub fn apply(ctx: &egui::Context) {
     v.widgets.inactive.bg_stroke = Stroke::new(1.0, EDGE_DARK);
     v.widgets.hovered.bg_fill = RAISED_HOVER;
     v.widgets.hovered.weak_bg_fill = RAISED_HOVER;
-    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x48, 0x4b, 0x52));
-    v.widgets.active.bg_fill = Color32::from_rgb(0x1a, 0x1b, 0x1e);
-    v.widgets.active.weak_bg_fill = Color32::from_rgb(0x1a, 0x1b, 0x1e);
-    v.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x5a, 0x5e, 0x66));
+    v.widgets.hovered.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x56, 0x5a, 0x62));
+    v.widgets.active.bg_fill = Color32::from_rgb(0x25, 0x27, 0x2b);
+    v.widgets.active.weak_bg_fill = Color32::from_rgb(0x25, 0x27, 0x2b);
+    v.widgets.active.bg_stroke = Stroke::new(1.0, Color32::from_rgb(0x68, 0x6c, 0x75));
     v.widgets.open.bg_fill = RAISED_HOVER;
     v.widgets.open.weak_bg_fill = RAISED_HOVER;
     v.widgets.open.bg_stroke = Stroke::new(1.0, HAIRLINE);
@@ -261,6 +289,83 @@ mod tests {
     fn the_check_catches_a_too_dark_label() {
         let too_dark = Color32::from_rgb(0x5a, 0x5d, 0x63);
         assert!(contrast(too_dark, RAISED) < 4.5);
+    }
+
+    /// Minimum contrast between surfaces that sit on each other, so panels stand out from
+    /// the window and controls and wells from their panel.
+    const MIN_STEP: f32 = 1.2;
+
+    /// (name, surface, the surface it sits on).
+    fn steps(
+        well: Color32,
+        bg: Color32,
+        panel: Color32,
+        raised: Color32,
+    ) -> [(&'static str, f32); 3] {
+        [
+            ("PANEL on BG", contrast(panel, bg)),
+            ("WELL in PANEL", contrast(well, panel)),
+            ("RAISED on PANEL", contrast(raised, panel)),
+        ]
+    }
+
+    #[test]
+    fn surface_steps_are_clearly_visible() {
+        for (name, r) in steps(WELL, BG, PANEL, RAISED) {
+            assert!(r >= MIN_STEP, "{name}: {r:.2}:1");
+        }
+    }
+
+    #[test]
+    fn the_step_check_catches_the_old_flat_palette() {
+        // The studio satin values before this change: every step about 1.1:1.
+        let old = steps(
+            Color32::from_rgb(0x08, 0x09, 0x0a),
+            Color32::from_rgb(0x0d, 0x0e, 0x10),
+            Color32::from_rgb(0x17, 0x18, 0x1b),
+            Color32::from_rgb(0x22, 0x24, 0x28),
+        );
+        assert!(old.iter().all(|&(_, r)| r < MIN_STEP), "{old:?}");
+    }
+
+    /// Every colour a control can be lit in.
+    const LIT: [(&str, Color32); 6] = [
+        ("DECK_A", DECK_A),
+        ("ACCENT", ACCENT),
+        ("DECK_B", DECK_B),
+        ("HOT_CUE", HOT_CUE),
+        ("LOOP", LOOP),
+        ("OK", OK),
+    ];
+
+    #[test]
+    fn text_on_a_selected_row_stays_readable() {
+        let row = selected_fill();
+        for (name, c, min) in [
+            ("TEXT", TEXT, 7.0),
+            ("TEXT_DIM", TEXT_DIM, 4.5),
+            ("KEY", KEY, 4.5),
+        ] {
+            let r = contrast(c, row);
+            assert!(r >= min, "{name} on the selected row: {r:.2}:1");
+        }
+    }
+
+    #[test]
+    fn selected_text_in_a_field_stays_readable() {
+        // egui inks selected text in the selection stroke colour, on the selection fill.
+        let r = contrast(ACCENT, selected_fill());
+        assert!(r >= 4.5, "ACCENT on the selected fill: {r:.2}:1");
+    }
+
+    #[test]
+    fn labels_on_lit_controls_have_at_least_4_5_to_1_contrast() {
+        for (name, c) in LIT {
+            for pressed in [false, true] {
+                let r = contrast(LIT_INK, lit_fill(c, pressed));
+                assert!(r >= 4.5, "LIT_INK on {name} (pressed {pressed}): {r:.2}:1");
+            }
+        }
     }
 
     /// Sizes the interface uses (including egui's own text styles).
