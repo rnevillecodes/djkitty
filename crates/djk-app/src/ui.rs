@@ -1862,10 +1862,7 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
             waveview::Marks::default(),
         );
     }
-    let analysis = app
-        .library
-        .as_ref()
-        .and_then(|l| l.analysis(row.id).ok().flatten());
+    let analysis = app.details_analysis(row.id);
 
     // BPM, key and loudness tiles.
     ui.add_space(6.0);

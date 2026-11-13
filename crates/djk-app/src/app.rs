@@ -132,6 +132,9 @@ pub struct DjApp {
     pub scroll_to_selected: bool,
     pub sets: Vec<SetSummary>,
     pub details_overview: Option<(TrackId, Vec<WaveCol>)>,
+    /// The stored analysis of the track in the details panel, read once per track (see
+    /// [`DjApp::details_analysis`]).
+    details_analysis: Option<(TrackId, Option<djk_library::AnalysisRecord>)>,
     pub renaming: Option<(SetId, String)>,
     pub new_set_name: String,
     /// Whether the "New set" dialog is open.
@@ -212,6 +215,7 @@ impl DjApp {
             scroll_to_selected: false,
             sets: Vec::new(),
             details_overview: None,
+            details_analysis: None,
             renaming: None,
             new_set_name: String::new(),
             new_set_dialog: false,
@@ -499,6 +503,7 @@ impl DjApp {
         {
             self.details_overview = None;
         }
+        self.forget_details_analysis(&[id]);
         self.notify(format!(
             "Removed “{title}” from the library (the file is still on your disk)"
         ));
@@ -658,6 +663,31 @@ impl DjApp {
             .is_some_and(|(id, _)| changed.contains(id))
         {
             self.details_overview = None;
+        }
+        self.forget_details_analysis(&changed);
+    }
+
+    /// The stored analysis of the track shown in the details panel. Read from the
+    /// library the first time it is asked for a track and kept until the track is
+    /// re-analysed or removed, because the panel asks again on every frame.
+    pub fn details_analysis(&mut self, id: TrackId) -> Option<djk_library::AnalysisRecord> {
+        if self.details_analysis.as_ref().is_none_or(|(d, _)| *d != id) {
+            let analysis = self
+                .library
+                .as_ref()
+                .and_then(|l| l.analysis(id).ok().flatten());
+            self.details_analysis = Some((id, analysis));
+        }
+        self.details_analysis.as_ref().and_then(|(_, a)| a.clone())
+    }
+
+    fn forget_details_analysis(&mut self, ids: &[TrackId]) {
+        if self
+            .details_analysis
+            .as_ref()
+            .is_some_and(|(id, _)| ids.contains(id))
+        {
+            self.details_analysis = None;
         }
     }
 
