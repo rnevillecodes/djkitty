@@ -304,7 +304,8 @@ impl Deck {
     }
 
     /// Render `out_l.len()` frames, adding nothing (writes, not mixes). Silence when paused.
-    pub fn render(&mut self, device_rate: u32, out_l: &mut [f32], out_r: &mut [f32]) {
+    /// Returns false when the deck is not playing, so the block is all zeros.
+    pub fn render(&mut self, device_rate: u32, out_l: &mut [f32], out_r: &mut [f32]) -> bool {
         let n = out_l.len().min(out_r.len());
         let block_secs = n as f64 / f64::from(device_rate.max(1));
         self.update_nudge(block_secs);
@@ -312,7 +313,7 @@ impl Deck {
         let Some(buffer) = self.buffer.as_ref().filter(|_| self.playing) else {
             out_l[..n].fill(0.0);
             out_r[..n].fill(0.0);
-            return;
+            return false;
         };
         let samples = &buffer.samples[..];
         let frames = buffer.frames();
@@ -378,6 +379,7 @@ impl Deck {
             self.previewing = false;
         }
         self.position = pos;
+        true
     }
 
     fn update_nudge(&mut self, block_secs: f64) {

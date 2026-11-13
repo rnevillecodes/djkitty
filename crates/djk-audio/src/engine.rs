@@ -10,6 +10,7 @@ use djk_core::{Command, DECK_COUNT, EngineState, LoadRequest, TrackBuffer};
 use rtrb::{Consumer, Producer, RingBuffer};
 use triple_buffer::{Input, Output};
 
+use crate::clock::OutputClock;
 use crate::deck::Deck;
 use crate::eq::Eq;
 use crate::filter::Filter;
@@ -79,7 +80,8 @@ pub struct Engine {
     scratch: [[Vec<f32>; 2]; DECK_COUNT],
     device_rate: u32,
     output_channels: u16,
-    output_latency: f64,
+    /// When rendered audio is heard, and the output latency reported in snapshots.
+    clock: OutputClock,
     overruns: u64,
     refused_loads: u64,
     frames_rendered: u64,
@@ -111,7 +113,7 @@ impl Engine {
             scratch: [scratch(), scratch()],
             device_rate,
             output_channels,
-            output_latency: 0.0,
+            clock: OutputClock::new(device_rate),
             overruns: 0,
             refused_loads: 0,
             frames_rendered: 0,
@@ -136,6 +138,8 @@ impl Engine {
     pub fn set_output(&mut self, device_rate: u32, output_channels: u16) {
         self.device_rate = device_rate;
         self.output_channels = output_channels;
+        // A new device has its own timing; start the averages afresh.
+        self.clock = OutputClock::new(device_rate);
         self.mixer.set_sample_rate(device_rate);
         for eq in &mut self.eqs {
             eq.set_sample_rate(device_rate);
@@ -150,9 +154,12 @@ impl Engine {
         self.device_rate
     }
 
-    /// Set the measured output latency (seconds) reported in snapshots.
-    pub fn set_output_latency(&mut self, secs: f64) {
-        self.output_latency = secs;
+    /// Record one callback's timing before rendering it: it runs at `now`, will render
+    /// `frames` frames, and the end of its block is heard `latency_secs` after `now`.
+    /// Returns the timestamp to pass to [`Engine::process`]: `now` with the callback's
+    /// scheduling jitter taken out (see [`OutputClock`]).
+    pub fn output_timing(&mut self, now: Instant, latency_secs: f64, frames: usize) -> Instant {
+        self.clock.update(now, latency_secs, frames)
     }
 
     /// Record a missed audio deadline.
@@ -183,7 +190,12 @@ impl Engine {
                 .zip(self.filters.iter_mut())
             {
                 let [l, r] = buf;
-                deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                let audible = deck.render(self.device_rate, &mut l[..n], &mut r[..n]);
+                // A stopped deck whose EQ and filter have rung out stays silent: skip them.
+                if !audible && eq.is_silent() && filter.is_silent() {
+                    eq.settle();
+                    continue;
+                }
                 // EQ then filter, both before the channel fader, so the channel meter,
                 // master and headphone cue all hear them.
                 eq.process(&mut l[..n], &mut r[..n]);
@@ -192,7 +204,7 @@ impl Engine {
                     *peak = peak.max(a.abs()).max(b.abs());
                 }
             }
-            let gains = self.mixer.master_gains();
+            let gains = self.mixer.block_gains();
             let chunk = &mut out[done * channels..(done + n) * channels];
             for (i, frame) in chunk.chunks_exact_mut(channels).enumerate() {
                 let decks = [
@@ -326,7 +338,7 @@ impl Engine {
             decks: [self.decks[0].state(), self.decks[1].state()],
             mixer: self.mixer.state,
             timestamp: now,
-            output_latency: self.output_latency,
+            output_latency: self.clock.latency(),
             device_rate: self.device_rate,
             output_channels: self.output_channels,
             overruns: self.overruns,
@@ -672,5 +684,26 @@ mod tests {
         });
         e.process(&mut out, 2, None);
         assert!(h.state.read().decks[0].hot_cues[0].is_none());
+    }
+
+    #[test]
+    fn reports_the_averaged_output_latency() {
+        let (mut e, _h) = Engine::new(48_000, 2);
+        let now = Instant::now();
+        // The first measurement is reported as it is.
+        e.output_timing(now, 0.010, 480);
+        assert_eq!(e.snapshot(None).output_latency, 0.010);
+        // Alternating ±3 ms jitter barely moves the reported value.
+        for i in 1..=200 {
+            let at = now + std::time::Duration::from_millis(10 * i);
+            e.output_timing(at, if i % 2 == 0 { 0.013 } else { 0.007 }, 480);
+            let l = e.snapshot(None).output_latency;
+            assert!((0.008..=0.012).contains(&l), "{l}");
+        }
+        // A device change starts afresh.
+        e.set_output(44_100, 2);
+        assert_eq!(e.snapshot(None).output_latency, 0.0);
+        e.output_timing(now, 0.025, 441);
+        assert_eq!(e.snapshot(None).output_latency, 0.025);
     }
 }

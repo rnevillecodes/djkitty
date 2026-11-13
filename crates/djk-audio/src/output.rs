@@ -6,6 +6,7 @@ use std::time::{Duration, Instant};
 
 use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
 
+use crate::denormal::NoDenormals;
 use crate::device::device_name;
 use crate::engine::Engine;
 
@@ -186,13 +187,16 @@ fn build(
                 last_callback = Some(now);
                 match engine.try_lock() {
                     Ok(mut e) => {
+                        // Filters decaying into silence must not hit the slow denormal path.
+                        let _no_denormals = NoDenormals::enter();
                         if overrun {
                             e.note_overrun();
                         }
                         // The published position is the end of this block, heard after the
                         // device latency plus the block itself.
-                        e.set_output_latency((device_latency + block).as_secs_f64());
-                        e.process(data, channels, Some(now));
+                        let latency = (device_latency + block).as_secs_f64();
+                        let rendered_at = e.output_timing(now, latency, frames);
+                        e.process(data, channels, Some(rendered_at));
                     }
                     Err(_) => data.fill(0.0),
                 }

@@ -13,7 +13,7 @@ use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery
 
 use crate::analysis::{AnalysisEvent, AnalysisPool};
 use crate::audio::AudioService;
-use crate::loader::{LoadJob, Loader};
+use crate::loader::{LoadJob, Loader, OverviewLoader};
 use crate::settings::Settings;
 use crate::waveview::{Peaks, WaveCol};
 
@@ -124,10 +124,20 @@ pub struct DjApp {
     pub query: TrackQuery,
     pub rows: Vec<TrackRow>,
     pub rows_dirty: bool,
+    /// Re-check which listed files exist on the next reload. Set when the list itself
+    /// changes (another view, an import), not for every reload: it reads the disk once
+    /// per track.
+    check_missing: bool,
     pub selected: Option<usize>,
     pub scroll_to_selected: bool,
     pub sets: Vec<SetSummary>,
     pub details_overview: Option<(TrackId, Vec<WaveCol>)>,
+    /// The track whose overview was last asked of `overview_loader`.
+    details_requested: Option<TrackId>,
+    overview_loader: OverviewLoader,
+    /// The stored analysis of the track in the details panel, read once per track (see
+    /// [`DjApp::details_analysis`]).
+    details_analysis: Option<(TrackId, Option<djk_library::AnalysisRecord>)>,
     pub renaming: Option<(SetId, String)>,
     pub new_set_name: String,
     /// Whether the "New set" dialog is open.
@@ -192,7 +202,7 @@ impl DjApp {
 
         let mut app = Self {
             audio,
-            loader: Loader::spawn(ctx),
+            loader: Loader::spawn(ctx.clone()),
             library,
             data_dir,
             pool,
@@ -203,10 +213,14 @@ impl DjApp {
             query: TrackQuery::default(),
             rows: Vec::new(),
             rows_dirty: true,
+            check_missing: true,
             selected: None,
             scroll_to_selected: false,
             sets: Vec::new(),
             details_overview: None,
+            details_requested: None,
+            overview_loader: OverviewLoader::spawn(ctx),
+            details_analysis: None,
             renaming: None,
             new_set_name: String::new(),
             new_set_dialog: false,
@@ -300,11 +314,16 @@ impl DjApp {
         self.row_numbers = numbers;
         match rows {
             Ok(mut rows) => {
-                // Cheap missing-file check of the rows being shown.
-                let ids: Vec<TrackId> = rows.iter().map(|r| r.id).collect();
-                let changed = lib.refresh_missing(&ids).unwrap_or_default();
-                for r in rows.iter_mut().filter(|r| changed.contains(&r.id)) {
-                    r.missing = !r.missing;
+                if std::mem::take(&mut self.check_missing) {
+                    let ids: Vec<TrackId> = rows.iter().map(|r| r.id).collect();
+                    let changed: std::collections::HashSet<TrackId> = lib
+                        .refresh_missing(&ids)
+                        .unwrap_or_default()
+                        .into_iter()
+                        .collect();
+                    for r in rows.iter_mut().filter(|r| changed.contains(&r.id)) {
+                        r.missing = !r.missing;
+                    }
                 }
                 self.rows = rows;
             }
@@ -332,6 +351,7 @@ impl DjApp {
             self.view = view;
             self.selected = None;
             self.rows_dirty = true;
+            self.check_missing = true;
         }
     }
 
@@ -481,13 +501,8 @@ impl DjApp {
             .map(|t| t.title)
             .unwrap_or_default();
         self.with_library(|lib| lib.remove_track(id));
-        if self
-            .details_overview
-            .as_ref()
-            .is_some_and(|(d, _)| *d == id)
-        {
-            self.details_overview = None;
-        }
+        self.forget_details_overview(&[id]);
+        self.forget_details_analysis(&[id]);
         self.notify(format!(
             "Removed “{title}” from the library (the file is still on your disk)"
         ));
@@ -606,6 +621,7 @@ impl DjApp {
             Err(e) => self.notify(format!("Import failed: {e}")),
         }
         self.rows_dirty = true;
+        self.check_missing = true;
     }
 
     fn poll_analysis(&mut self) {
@@ -640,12 +656,31 @@ impl DjApp {
                 }
             }
         }
+        self.forget_details_overview(&changed);
+        self.forget_details_analysis(&changed);
+    }
+
+    /// The stored analysis of the track shown in the details panel. Read from the
+    /// library the first time it is asked for a track and kept until the track is
+    /// re-analysed or removed, because the panel asks again on every frame.
+    pub fn details_analysis(&mut self, id: TrackId) -> Option<djk_library::AnalysisRecord> {
+        if self.details_analysis.as_ref().is_none_or(|(d, _)| *d != id) {
+            let analysis = self
+                .library
+                .as_ref()
+                .and_then(|l| l.analysis(id).ok().flatten());
+            self.details_analysis = Some((id, analysis));
+        }
+        self.details_analysis.as_ref().and_then(|(_, a)| a.clone())
+    }
+
+    fn forget_details_analysis(&mut self, ids: &[TrackId]) {
         if self
-            .details_overview
+            .details_analysis
             .as_ref()
-            .is_some_and(|(id, _)| changed.contains(id))
+            .is_some_and(|(id, _)| ids.contains(id))
         {
-            self.details_overview = None;
+            self.details_analysis = None;
         }
     }
 
@@ -900,7 +935,9 @@ impl DjApp {
                 Some(seen) if seen != s.hot_cues => {
                     ui.seen_hot_cues = Some(s.hot_cues);
                     let id = TrackId(ui.token as i64);
-                    self.with_library(|lib| {
+                    // Straight to the library, not `with_library`: hot cues appear in
+                    // neither the track list nor the sets, so there is nothing to reload.
+                    let saved = self.library.as_mut().map(|lib| {
                         // Write only the slots this deck changed, so another deck holding
                         // the same track (with its own copy of the cues) can't undo edits
                         // made there.
@@ -916,6 +953,9 @@ impl DjApp {
                             r => r,
                         }
                     });
+                    if let Some(Err(e)) = saved {
+                        self.notify(format!("Library error: {e}"));
+                    }
                 }
                 Some(_) => {}
             }
@@ -942,17 +982,31 @@ impl DjApp {
         }
     }
 
+    /// Keep the details panel's overview on the selected track. The waveform file is read
+    /// on a background thread, so the overview appears a moment after the selection moves.
     fn update_details(&mut self) {
+        while let Some((id, cols)) = self.overview_loader.try_recv() {
+            // Anything but the latest request has been overtaken.
+            if self.details_requested == Some(id) {
+                self.details_overview = Some((id, cols));
+            }
+        }
         let Some(id) = self.selected_row().map(|r| r.id) else {
             return;
         };
-        if self.details_overview.as_ref().is_none_or(|(d, _)| *d != id)
+        if self.details_requested != Some(id)
             && let Some(lib) = &self.library
         {
-            let bins = Waveform::load(&lib.waveform_path(id))
-                .map(|w| crate::waveview::cols_from_bins(&w.overview(400)))
-                .unwrap_or_default();
-            self.details_overview = Some((id, bins));
+            self.details_requested = Some(id);
+            self.overview_loader.request(id, lib.waveform_path(id));
+        }
+    }
+
+    /// Drop the details panel's overview if it is for one of `ids`, so it is read again.
+    fn forget_details_overview(&mut self, ids: &[TrackId]) {
+        if self.details_requested.is_some_and(|id| ids.contains(&id)) {
+            self.details_requested = None;
+            self.details_overview = None;
         }
     }
 }

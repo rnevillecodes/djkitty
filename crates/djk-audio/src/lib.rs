@@ -1,6 +1,8 @@
 //! Real-time audio engine: decks, mixer, limiter and cpal device output.
 
+pub mod clock;
 pub mod deck;
+pub mod denormal;
 pub mod device;
 pub mod engine;
 pub mod eq;

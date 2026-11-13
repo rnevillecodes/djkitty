@@ -318,9 +318,10 @@ impl Default for MixerState {
 pub struct EngineState {
     pub decks: [DeckState; DECK_COUNT],
     pub mixer: MixerState,
-    /// When the block that produced this snapshot was rendered.
+    /// When the block that produced this snapshot was rendered, with the audio callback's
+    /// scheduling jitter taken out: its end is heard `output_latency` after this.
     pub timestamp: Option<Instant>,
-    /// Output latency in seconds (buffer plus device), as measured by the stream.
+    /// Output latency in seconds (buffer plus device), measured by the stream and averaged.
     pub output_latency: f64,
     pub device_rate: u32,
     pub output_channels: u16,

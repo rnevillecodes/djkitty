@@ -71,6 +71,19 @@ pub struct Mixer {
     headphone_limiter: Limiter,
 }
 
+/// Gains that hold for a whole block (see [`Mixer::block_gains`]), so the per-frame mix
+/// is only multiplies and adds.
+#[derive(Debug, Clone, Copy)]
+pub struct BlockGains {
+    /// Per-deck gain into the master (channel fader × crossfader × master level).
+    master: [f32; DECK_COUNT],
+    /// Per-deck gain into the headphones: the headphone level for cued decks, else 0.
+    cue: [f32; DECK_COUNT],
+    /// Gain of the master mix into the headphones: the headphone level when no deck is
+    /// cued, else 0.
+    headphone_master: f32,
+}
+
 /// One stereo frame from each deck.
 pub type DeckFrames = [(f32, f32); DECK_COUNT];
 
@@ -88,45 +101,44 @@ impl Mixer {
         self.headphone_limiter.set_sample_rate(sample_rate);
     }
 
-    /// Per-deck master gains (channel fader × crossfader × master level).
-    pub fn master_gains(&self) -> [f32; DECK_COUNT] {
+    /// The gains for a block, worked out once from the current fader positions.
+    pub fn block_gains(&self) -> BlockGains {
         let (xa, xb) = crossfader_gains(self.state.crossfader);
         let master = fader_gain(self.state.master_level);
-        [
-            fader_gain(self.state.channel_fader[0]) * xa * master,
-            fader_gain(self.state.channel_fader[1]) * xb * master,
-        ]
+        let headphone = fader_gain(self.state.headphone_level);
+        BlockGains {
+            master: [
+                fader_gain(self.state.channel_fader[0]) * xa * master,
+                fader_gain(self.state.channel_fader[1]) * xb * master,
+            ],
+            cue: self
+                .state
+                .headphone_cue
+                .map(|on| if on { headphone } else { 0.0 }),
+            headphone_master: if self.state.headphone_cue.contains(&true) {
+                0.0
+            } else {
+                headphone
+            },
+        }
     }
 
     /// Mix one frame. Returns `(master, headphones)` stereo pairs, both limited.
     #[inline]
-    pub fn mix(
-        &mut self,
-        decks: DeckFrames,
-        gains: &[f32; DECK_COUNT],
-    ) -> ((f32, f32), (f32, f32)) {
+    pub fn mix(&mut self, decks: DeckFrames, gains: &BlockGains) -> ((f32, f32), (f32, f32)) {
         let mut ml = 0.0;
         let mut mr = 0.0;
-        for (d, g) in decks.iter().zip(gains) {
+        let mut hl = 0.0;
+        let mut hr = 0.0;
+        for ((d, g), cue) in decks.iter().zip(gains.master).zip(gains.cue) {
             ml += d.0 * g;
             mr += d.1 * g;
+            hl += d.0 * cue;
+            hr += d.1 * cue;
         }
-
-        let hp_gain = fader_gain(self.state.headphone_level);
-        let any_cue = self.state.headphone_cue.iter().any(|&c| c);
-        let (mut hl, mut hr) = if any_cue {
-            let mut hl = 0.0;
-            let mut hr = 0.0;
-            for (d, &cue) in decks.iter().zip(&self.state.headphone_cue) {
-                if cue {
-                    hl += d.0;
-                    hr += d.1;
-                }
-            }
-            (hl * hp_gain, hr * hp_gain)
-        } else {
-            (ml * hp_gain, mr * hp_gain)
-        };
+        // With no deck cued, the headphones carry the master mix (before its limiter).
+        hl += ml * gains.headphone_master;
+        hr += mr * gains.headphone_master;
 
         self.master_limiter.process(&mut ml, &mut mr);
         self.headphone_limiter.process(&mut hl, &mut hr);
@@ -146,7 +158,7 @@ mod tests {
     }
 
     fn master_of(m: &mut Mixer, decks: DeckFrames) -> (f32, f32) {
-        let g = m.master_gains();
+        let g = m.block_gains();
         m.mix(decks, &g).0
     }
 
@@ -200,7 +212,7 @@ mod tests {
         for i in 0..48_000 {
             let v = if i % 2 == 0 { 1.0 } else { -1.0 };
             let ((l, r), (hl, hr)) = {
-                let g = m.master_gains();
+                let g = m.block_gains();
                 m.mix([(v, v), (v, v)], &g)
             };
             for s in [l, r, hl, hr] {
@@ -229,7 +241,7 @@ mod tests {
         m.state.channel_fader[1] = 0.0;
         m.state.headphone_cue[1] = true;
         m.state.headphone_level = 1.0;
-        let g = m.master_gains();
+        let g = m.block_gains();
         let ((ml, _), (hl, _)) = m.mix([SILENT, (0.5, 0.5)], &g);
         assert_eq!(ml, 0.0, "deck B not in master");
         assert!((hl - 0.5).abs() < 1e-6, "deck B in headphones");
@@ -239,7 +251,7 @@ mod tests {
     fn headphones_carry_master_without_cue() {
         let mut m = mixer();
         m.state.headphone_level = 1.0;
-        let g = m.master_gains();
+        let g = m.block_gains();
         let ((ml, _), (hl, _)) = m.mix([(0.3, 0.3), (0.2, 0.2)], &g);
         assert!((ml - hl).abs() < 1e-6);
         assert!((ml - 0.5).abs() < 1e-6);

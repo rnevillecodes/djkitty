@@ -186,6 +186,11 @@ impl Filter {
         self.target = mode(value);
     }
 
+    /// True when the filter is bypassed, so silence in gives silence out.
+    pub fn is_silent(&self) -> bool {
+        self.bypassed && self.target == FilterMode::Off
+    }
+
     fn bypass(&mut self) {
         self.bypassed = true;
         self.wet = 0.0;
