@@ -29,7 +29,7 @@
 
 ## 5. Engine: eject
 
-- [ ] 5.1 Add `Command::Eject(DeckId)`: refused while playing, retires the buffer through the existing retire queue, does nothing when the queue is full, and leaves the deck empty with hot cues and loop cleared. Verify with deck unit tests, the `Command` size test and `no_alloc`
+- [x] 5.1 Add `Command::Eject(DeckId)`: refused while playing, retires the buffer through the existing retire queue, does nothing when the queue is full, and leaves the deck empty with hot cues and loop cleared. Verify with deck unit tests, the `Command` size test and `no_alloc`
 
 ## 6. App: vaults
 

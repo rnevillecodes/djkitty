@@ -240,18 +240,18 @@ impl Engine {
 
     fn drain_commands(&mut self) {
         while let Ok(&cmd) = self.ui_commands.peek() {
-            // Only take a load when there is room to retire the outgoing buffer (or the
-            // refused incoming one), so nothing is ever freed on this thread. Otherwise leave
-            // it, and everything after it, for the next block.
-            if matches!(cmd, Command::Load(_)) && self.retire.slots() < 1 {
+            // Only take a load or eject when there is room to retire the outgoing buffer
+            // (or the refused incoming one), so nothing is ever freed on this thread.
+            // Otherwise leave it, and everything after it, for the next block.
+            if matches!(cmd, Command::Load(_) | Command::Eject(_)) && self.retire.slots() < 1 {
                 break;
             }
             let _ = self.ui_commands.pop();
             self.apply(cmd);
         }
         while let Ok(cmd) = self.controller_commands.pop() {
-            // Loads only come from the UI queue.
-            if !matches!(cmd, Command::Load(_)) {
+            // Loads and ejects only come from the UI queue.
+            if !matches!(cmd, Command::Load(_) | Command::Eject(_)) {
                 self.apply(cmd);
             }
         }
@@ -278,6 +278,12 @@ impl Engine {
         let mix = &mut self.mixer.state;
         match cmd {
             Command::Load(_) => self.take_load(),
+            Command::Eject(d) => {
+                if let Some(buf) = self.decks[d.index()].eject() {
+                    // Room was checked before popping the command.
+                    let _ = self.retire.push(buf);
+                }
+            }
             Command::Play(d) => self.decks[d.index()].play(),
             Command::Pause(d) => self.decks[d.index()].pause(),
             Command::TogglePlay(d) => self.decks[d.index()].toggle_play(),
@@ -661,6 +667,37 @@ mod tests {
         let s = *h.state.read();
         assert_eq!(s.decks[0].load_refusals, 1);
         assert_eq!(s.decks[1].load_refusals, 0);
+    }
+
+    #[test]
+    fn eject_empties_a_stopped_deck_and_retires_its_buffer() {
+        let (mut e, mut h) = Engine::new(48_000, 2);
+        load(&mut h, DeckId::A, tone(48_000, 1.0, 0.5), 1);
+        load(&mut h, DeckId::B, tone(48_000, 1.0, 0.5), 2);
+        h.send(Command::HotCuePress {
+            deck: DeckId::A,
+            slot: 0,
+        });
+        h.send(Command::Play(DeckId::B));
+        let mut out = vec![0.0; 64 * 2];
+        e.process(&mut out, 2, None);
+        h.drop_retired();
+
+        h.send(Command::Eject(DeckId::A));
+        h.send(Command::Eject(DeckId::B)); // playing: refused
+        e.process(&mut out, 2, None);
+        let s = *h.state.read();
+        assert!(!s.decks[0].loaded);
+        assert_eq!(s.decks[0].track_token, 0);
+        assert!(s.decks[0].hot_cues.iter().all(Option::is_none));
+        assert!(s.decks[0].active_loop.is_none());
+        assert!(s.decks[1].loaded && s.decks[1].playing);
+        assert_eq!(h.drop_retired(), 1, "A's buffer went to the retire queue");
+
+        // Ejecting an empty deck does nothing.
+        h.send(Command::Eject(DeckId::A));
+        e.process(&mut out, 2, None);
+        assert_eq!(h.drop_retired(), 0);
     }
 
     #[test]

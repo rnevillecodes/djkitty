@@ -75,6 +75,9 @@ pub enum Command {
     /// Take the next [`LoadRequest`] from the load queue and put it on the deck (refused if
     /// the deck is playing). Sent by `EngineHandles::load`, never on its own.
     Load(DeckId),
+    /// Empty a deck (refused while it plays), e.g. when switching vaults. The track's
+    /// buffer is retired off the audio thread, like the outgoing track of a load.
+    Eject(DeckId),
     /// Start playback from the current position.
     Play(DeckId),
     /// Hold the current position.

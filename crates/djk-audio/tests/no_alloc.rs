@@ -185,4 +185,14 @@ fn process_never_allocates_or_frees() {
 
     // The buffers are freed on this (non-audio) side instead.
     assert_eq!(h.drop_retired(), 2);
+
+    // Ejecting the paused deck retires its buffer the same way.
+    h.send(Command::Eject(DeckId::A));
+    let (allocs, frees) = measure(|| {
+        for _ in 0..5 {
+            engine.process(&mut out, 4, Some(Instant::now()));
+        }
+    });
+    assert_eq!((allocs, frees), (0, 0), "while ejecting");
+    assert_eq!(h.drop_retired(), 1);
 }

@@ -74,6 +74,27 @@ impl Deck {
         old
     }
 
+    /// Empty the deck, returning its buffer so the caller can retire it off the audio
+    /// thread. Refused (returns `None`, nothing changes) while playing.
+    pub fn eject(&mut self) -> Option<TrackBuffer> {
+        if self.playing {
+            return None;
+        }
+        let old = self.buffer.take()?;
+        self.token = 0;
+        self.position = 0.0;
+        self.cue = 0.0;
+        self.previewing = false;
+        self.jog_velocity = 0.0;
+        self.nudge = 0.0;
+        self.hot_cues = Default::default();
+        self.held_hot_cue = None;
+        self.active_loop = None;
+        self.beat_frames = None;
+        self.xfade_left = 0;
+        Some(old)
+    }
+
     /// Move the playhead for a DJ action (seek, cue, hot cue). Leaving the active loop's
     /// region ends the loop.
     fn move_to(&mut self, frame: f64) {
