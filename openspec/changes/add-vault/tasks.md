@@ -50,7 +50,7 @@
 
 ## 8. Documentation
 
-- [ ] 8.1 Update `README.md`: vaults (create, open, switch, layout, portability, cloud warning), copy on import, removal deleting the vault copy, broken links and Locate file, set playlist files, and the reworded promise about original files. Verify the README describes only built behaviour and no longer says djkitty never deletes audio files
+- [x] 8.1 Update `README.md`: vaults (create, open, switch, layout, portability, cloud warning), copy on import, removal deleting the vault copy, broken links and Locate file, set playlist files, and the reworded promise about original files. Verify the README describes only built behaviour and no longer says djkitty never deletes audio files
 
 ## 9. End-to-end check
 

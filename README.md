@@ -12,15 +12,34 @@ enough to learn on, built to grow into a full replacement for commercial DJ soft
 
 ## What v0.1 does
 
+- **Vaults:** your library lives in a **vault**, a folder you create on first launch (give it a name and pick
+  where it goes: any drive, or a USB stick to take to a gig). Every track you import is **copied** into it, so
+  the vault keeps working when the originals move or disappear, and it can be moved, renamed or opened on another
+  computer as it is. djkitty reopens the last vault on launch; the vault button in the library toolbar switches
+  to another vault or creates a new one (with both decks stopped). You are warned before using a folder synced by
+  OneDrive, Dropbox or iCloud Drive, as syncing can damage the library database.
+
+  ```text
+  My DJ Vault\
+    .djkitty\            library database and waveform cache (djkitty's own)
+    Catalog\<artist>\    a copy of every imported file, under its original name
+    Sets\<set>.m3u8      each set as a playlist that other players can open
+  ```
 - **Library:** import files or a music folder (recursively) from the **Import** button, or **drag and drop files and folders**
-  onto the window (dropping while a set is open also adds them to that set); search, and sort by title, artist,
-  BPM, key, LUFS or duration; drag the column dividers to resize (the columns always fill the list). Missing files are flagged. Remove tracks from a set or from the library (right-click or
-  `Del`); **djkitty never edits, moves or deletes your audio files**.
+  onto the window (dropping while a set is open also adds them to that set). Files are copied byte for byte into
+  `Catalog\<artist>\`; a file already in the vault (the same content, from anywhere) is not copied again, and a
+  different file with the same name gets a ` (2)` suffix. Search, and sort by title, artist,
+  BPM, key, LUFS or duration; drag the column dividers to resize (the columns always fill the list). A track whose
+  file is missing from the vault shows a **broken link** icon: right-click it and choose **Locate file…** to copy it
+  back from any copy of the same file. Remove tracks from a set, or from the library (right-click or `Del`), which
+  **permanently deletes the vault's copy** after asking. **djkitty never changes, moves or deletes your original
+  files**, and never edits the copies in the vault either: hot cues, grids and sets live in the library.
 - **Analysis in the background:** duration, format, sample rate, channels, bitrate,
   **BPM**, **key** (Camelot and standard notation), **loudness** (LUFS, EBU R128) and a **3-band waveform** for every
   track. Results are cached, so tracks are analysed once.
 - **Sets:** create, rename and delete sets; add tracks; sort by any column (click **#** for the set order); drag tracks to reorder them; see
-  track count and total duration.
+  track count and total duration. Each set is kept as an `.m3u8` playlist in the vault's `Sets` folder, rewritten
+  from the library whenever the set changes (edits made to the file elsewhere are overwritten).
 - **Two decks:** load by dragging a track from the list onto a deck, its waveform or that
   side of the mixer (or with `Ctrl+←` / `Ctrl+→`, or the right-click menu), play/pause, CDJ-style cue (set, return, hold to preview), ±8% pitch
   fader, jog nudge, elapsed/remaining time, and a **scrolling waveform** plus a
@@ -61,9 +80,11 @@ cd djkitty
 cargo run --release -p djk-app
 ```
 
-The binary is called `djkitty`. Your library is stored in the platform data directory
-(on Windows, `%APPDATA%\djkitty\data`). Set `DJKITTY_DATA_DIR` to use a different
-directory, for example a throwaway test library.
+The binary is called `djkitty`. Your library lives in the vault you create or open on
+first launch. Per-computer settings (audio device, column widths, the last and recent
+vaults) are stored in the platform data directory (on Windows, `%APPDATA%\djkitty\data`).
+Set `DJKITTY_DATA_DIR` to use a different settings directory, for example to start fresh
+at the welcome screen.
 
 ### Developer flags
 
@@ -72,8 +93,8 @@ directory, for example a throwaway test library.
 | `--list-audio-devices` | Lists output devices with their channel counts, sample rates and buffer sizes |
 | `--test-tone [master\|headphones\|silent]` | Plays a 440 Hz tone for 3 s, then prints latency and overruns |
 | `--midi-monitor [filter]` | Logs raw MIDI from matching ports (default `DDJ-FLX2`); type hex bytes to send them |
-| `--import-folder <path>` | Imports and analyses a folder without opening the UI |
-| `--analyse [paths…]` | Prints BPM, key, loudness and beatgrid for files or folders (no paths: every library track, next to its stored BPM). Never saves results or touches audio files, but opening the library applies any pending database upgrade |
+| `--import-folder <path>` | Imports (copies) and analyses a folder into the last opened vault without opening the UI |
+| `--analyse [paths…]` | Prints BPM, key, loudness and beatgrid for files or folders (no paths: every track in the last opened vault, next to its stored BPM). Never saves results or touches audio files |
 
 ```bash
 cargo run -p djk-app -- --list-audio-devices
@@ -101,7 +122,7 @@ status bar to see this list in the app.
 | `Ctrl+←` / `Ctrl+→` | Load the selected track to deck A / B |
 | `Ctrl+F` | Search the library (or filter the open set) |
 | `Esc` | Clear the selection (hides the track details panel) |
-| `Del` | Remove the selected track from the open set, or from the library (asks first; files are never deleted) |
+| `Del` | Remove the selected track from the open set, or from the library (asks first, then deletes the vault's copy; your original file is never touched) |
 
 ## Not in v0.1
 
@@ -119,7 +140,7 @@ visual aid and beatmatching stays your job.
 | `djk-core` | Shared types: commands, engine snapshots, BPM and key |
 | `djk-audio` | Real-time engine: decks, mixer, limiter, cpal output |
 | `djk-analysis` | Decoding, file stats, BPM, key, waveforms |
-| `djk-library` | SQLite library, folder import, sets |
+| `djk-library` | Vaults, SQLite library, import into the Catalog, sets and their playlists |
 | `djk-controller` | MIDI discovery, mappings, soft takeover, LEDs |
 | `djk-app` | The egui application |
 
