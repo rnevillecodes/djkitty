@@ -12,6 +12,7 @@ djk-analysis.workspace = true
 rusqlite.workspace = true
 lofty.workspace = true
 walkdir.workspace = true
+blake3.workspace = true
 directories.workspace = true
 thiserror.workspace = true
 tracing.workspace = true

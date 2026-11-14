@@ -30,6 +30,7 @@ rustfft = "6.4"
 rusqlite = { version = "0.41", features = ["bundled"] }
 lofty = "0.25"
 walkdir = "2.5"
+blake3 = "1.8"
 directories = "6.0"
 num_cpus = "1.17"
 eframe = { version = "0.37", default-features = false, features = ["wgpu", "default_fonts", "accesskit"] }
