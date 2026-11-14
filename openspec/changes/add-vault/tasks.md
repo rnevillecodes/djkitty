@@ -46,7 +46,7 @@
 - [x] 7.1 Add `assets/icons/link-broken.svg` (16px, matching the stroke style of `file.svg`) and draw it in `theme::DANGER` in the library and set views in place of the "missing" label, with the tooltip. Verify by deleting a Catalog file in Explorer and screenshotting both views at the minimum window size → Verified 2026-11-14 by the user: broken link icon shows in the library and set views.
 - [ ] 7.2 Add "Locate file…" to the row context menu and the details panel (picker opens at the source folder when it exists), with success and "not the same file" notices. Verify "Locate the original" and "Wrong file" in the app, and that the track then loads with its hot cues
 - [x] 7.3 Reword the removal dialog (permanent vault delete, hot cues and beatgrid, set count, original not affected) and its notices, including the "could not delete the file" case. Verify "Remove a track in two sets" and "Cancel" in the app and check the Catalog folder in Explorer → Verified 2026-11-14 by the user: new removal wording, vault copy deleted, original untouched.
-- [ ] 7.4 Update the import notice to report bytes copied as well as files added, already in the vault, and skipped. Verify by importing a folder twice: the second import reports everything already in the vault and finishes quickly
+- [x] 7.4 Update the import notice to report bytes copied as well as files added, already in the vault, and skipped. Verify by importing a folder twice: the second import reports everything already in the vault and finishes quickly → Verified 2026-11-14 by the user.
 
 ## 8. Documentation
 
