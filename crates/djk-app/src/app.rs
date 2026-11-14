@@ -1,6 +1,6 @@
 //! The main application: state, background services and per-frame wiring.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::Receiver;
 use std::time::Instant;
@@ -9,7 +9,10 @@ use djk_analysis::Waveform;
 use djk_analysis::waveform::OVERVIEW_BINS;
 use djk_controller::{Action, ControllerManager, DDJ_FLX2};
 use djk_core::{Command, DeckId, HOT_CUE_COUNT, HotCues, LoadRequest, PadMode, TrackId};
-use djk_library::{ImportSummary, Library, SetId, SetSummary, SortKey, TrackQuery, TrackRow};
+use djk_library::{
+    FileRemoval, ImportSummary, Library, LibraryError, SetId, SetSummary, SortKey, TrackQuery,
+    TrackRow, Vault,
+};
 
 use crate::analysis::{AnalysisEvent, AnalysisPool};
 use crate::audio::AudioService;
@@ -106,15 +109,28 @@ pub enum View {
 /// Import running on a background thread.
 pub struct ImportJob {
     pub progress: Arc<std::sync::atomic::AtomicUsize>,
-    /// Summary, plus how many tracks were appended to the target set (if any).
-    pub result: Receiver<Result<(ImportSummary, Option<usize>), String>>,
+    pub result: Receiver<Result<ImportOutcome, String>>,
+}
+
+/// What a finished import reports.
+pub struct ImportOutcome {
+    pub summary: ImportSummary,
+    /// How many tracks were appended to the target set (if there was one).
+    pub added_to_set: Option<usize>,
+    /// Problems that didn't stop the import (e.g. a set's playlist file).
+    pub warnings: Vec<String>,
 }
 
 pub struct DjApp {
     pub audio: AudioService,
     pub loader: Loader,
+    /// For background threads to wake the UI.
+    repaint: egui::Context,
+    /// The open vault. While `None` the welcome screen replaces the library, and nothing
+    /// can be imported or loaded.
+    pub vault: Option<Vault>,
+    pub vault_ui: crate::vault_ui::VaultUi,
     pub library: Option<Library>,
-    pub data_dir: PathBuf,
     pub pool: Option<AnalysisPool>,
     pub controller: Option<ControllerManager>,
     pub settings: Settings,
@@ -180,21 +196,6 @@ impl DjApp {
         let mut audio = AudioService::start(settings.audio_device.as_deref());
         let ctx = cc.egui_ctx.clone();
 
-        let mut library = match Library::open_in(&data_dir) {
-            Ok(l) => Some(l),
-            Err(e) => {
-                tracing::error!("cannot open library: {e}");
-                None
-            }
-        };
-        let pool = library.as_mut().map(|lib| {
-            let repaint = ctx.clone();
-            let pool = AnalysisPool::start(&data_dir, crate::analysis::worker_count(), move || {
-                repaint.request_repaint()
-            });
-            pool.rescan(lib);
-            pool
-        });
         let controller = audio.handles.controller.take().map(|queue| {
             let repaint = ctx.clone();
             ControllerManager::start(&DDJ_FLX2, queue, move || repaint.request_repaint())
@@ -203,9 +204,11 @@ impl DjApp {
         let mut app = Self {
             audio,
             loader: Loader::spawn(ctx.clone()),
-            library,
-            data_dir,
-            pool,
+            repaint: ctx.clone(),
+            vault: None,
+            vault_ui: Default::default(),
+            library: None,
+            pool: None,
             controller,
             settings,
             decks: Default::default(),
@@ -243,8 +246,112 @@ impl DjApp {
             meters_updated: Instant::now(),
         };
         app.refresh_devices();
-        app.reload_sets();
+        if let Some(root) = app.settings.last_vault.clone()
+            && let Err(e) = app.open_vault(&root)
+        {
+            tracing::warn!("cannot open the last vault: {e}");
+            app.vault_ui.problem = Some(e);
+        }
         app
+    }
+
+    // ---- Vaults ----
+
+    /// Why the vault can't be switched right now, if it can't.
+    pub fn vault_switch_blocked(&self) -> Option<String> {
+        if self.audio.state.decks.iter().any(|d| d.playing) {
+            Some("Stop both decks to switch vaults".into())
+        } else if self.import.is_some() {
+            Some("Wait for the import to finish to switch vaults".into())
+        } else {
+            None
+        }
+    }
+
+    /// Open the vault at `root` in place of the current one. Returns the message to show
+    /// when it can't be opened.
+    pub fn open_vault(&mut self, root: &Path) -> Result<(), String> {
+        if let Some(why) = self.vault_switch_blocked() {
+            return Err(why);
+        }
+        let vault = Vault::open(root).map_err(|e| describe_vault_error(&e))?;
+        self.install_vault(vault)
+    }
+
+    /// Create the vault `<parent>\<name>` and open it.
+    pub fn create_vault(&mut self, parent: &Path, name: &str) -> Result<(), String> {
+        if let Some(why) = self.vault_switch_blocked() {
+            return Err(why);
+        }
+        let vault = Vault::create(parent, name).map_err(|e| match e {
+            LibraryError::InvalidName(n) if n.is_empty() => "Enter a name for the vault".into(),
+            LibraryError::InvalidName(n) => format!(
+                "“{n}” can't be used as a folder name. Leave out \\ / : * ? \" < > | and \
+                 don't end it with a dot or a space."
+            ),
+            LibraryError::AlreadyExists(p) => {
+                format!("{} already exists. Choose another name.", p.display())
+            }
+            e => describe_vault_error(&e),
+        })?;
+        self.install_vault(vault)
+    }
+
+    fn install_vault(&mut self, vault: Vault) -> Result<(), String> {
+        let mut library = Library::open(&vault).map_err(|e| describe_vault_error(&e))?;
+        self.close_vault();
+        let repaint = self.repaint.clone();
+        let pool = AnalysisPool::start(&vault, crate::analysis::worker_count(), move || {
+            repaint.request_repaint()
+        });
+        pool.rescan(&mut library);
+        let warnings = library.take_warnings();
+        self.settings.remember_vault(vault.root());
+        self.settings.save();
+        self.vault = Some(vault);
+        self.library = Some(library);
+        self.pool = Some(pool);
+        self.vault_ui.problem = None;
+        self.reload_sets();
+        if let Some(w) = warnings.into_iter().next() {
+            self.notify(w);
+        }
+        Ok(())
+    }
+
+    /// Close the open vault: empty both decks, stop analysis and forget everything shown
+    /// from its library.
+    fn close_vault(&mut self) {
+        for deck in DeckId::ALL {
+            if let Some(slot) = self.decks[deck.index()].pad_held.take() {
+                self.audio.send(Command::HotCueRelease { deck, slot });
+            }
+            let pad_mode = self.decks[deck.index()].pad_mode;
+            self.decks[deck.index()] = DeckUi {
+                pad_mode,
+                ..Default::default()
+            };
+            if self.audio.state.deck(deck).loaded {
+                self.audio.send(Command::Eject(deck));
+            }
+        }
+        // Dropping the pool waits for its workers to finish their current track.
+        self.pool = None;
+        self.library = None;
+        self.vault = None;
+        self.view = View::Library;
+        self.rows.clear();
+        self.row_numbers.clear();
+        self.sets.clear();
+        self.selected = None;
+        self.renaming = None;
+        self.remove_prompt = None;
+        self.clear_cues_prompt = None;
+        self.details_overview = None;
+        self.details_requested = None;
+        self.details_analysis = None;
+        self.rows_dirty = true;
+        self.check_missing = true;
     }
 
     pub fn notify(&mut self, msg: impl Into<String>) {
@@ -390,8 +497,12 @@ impl DjApp {
         let Some(lib) = self.library.as_mut() else {
             return;
         };
-        if let Err(e) = f(lib) {
+        let result = f(lib);
+        let warning = lib.take_warnings().into_iter().next();
+        if let Err(e) = result {
             self.notify(format!("Library error: {e}"));
+        } else if let Some(w) = warning {
+            self.notify(w);
         }
         self.reload_sets();
         self.rows_dirty = true;
@@ -434,8 +545,8 @@ impl DjApp {
         }
     }
 
-    // ---- Track management. None of this touches audio files on disk: removing only
-    // changes the library database (and drops djkitty's own cached waveform).
+    // ---- Track management. Original files are never touched: removing a track deletes
+    // only djkitty's own copy in the vault (and its cached waveform).
 
     /// Ask to remove a track from the library (opens a confirmation dialog).
     pub fn ask_remove_from_library(&mut self, id: TrackId) {
@@ -492,7 +603,8 @@ impl DjApp {
         self.with_library(|lib| lib.set_hot_cues(id, &[None; HOT_CUE_COUNT]));
     }
 
-    /// Remove a track from the library (and every set). The file stays on disk.
+    /// Remove a track from the library (and every set) and permanently delete its copy in
+    /// the vault. The original file is never touched.
     pub fn remove_from_library(&mut self, id: TrackId) {
         let title = self
             .library
@@ -500,12 +612,69 @@ impl DjApp {
             .and_then(|l| l.track(id).ok())
             .map(|t| t.title)
             .unwrap_or_default();
-        self.with_library(|lib| lib.remove_track(id));
+        let mut outcome = None;
+        self.with_library(|lib| {
+            outcome = Some(lib.remove_track(id)?);
+            Ok(())
+        });
         self.forget_details_overview(&[id]);
         self.forget_details_analysis(&[id]);
-        self.notify(format!(
-            "Removed “{title}” from the library (the file is still on your disk)"
-        ));
+        let Some(outcome) = outcome else { return };
+        self.notify(match outcome {
+            FileRemoval::Deleted | FileRemoval::AlreadyGone => format!(
+                "Removed “{title}” and deleted its copy from the vault (your original file \
+                 is untouched)"
+            ),
+            FileRemoval::Refused => format!(
+                "Removed “{title}” from the library. Its file is not in the vault's Catalog, \
+                 so it was not deleted"
+            ),
+            FileRemoval::Failed(e) => format!(
+                "Removed “{title}” from the library, but its file could not be deleted from \
+                 the vault: {e}"
+            ),
+        });
+    }
+
+    /// Repair a track whose vault file is missing: pick any copy of the same file (the
+    /// picker starts where the track was imported from) to copy back into the vault.
+    pub fn locate_file(&mut self, id: TrackId) {
+        let Some(lib) = self.library.as_mut() else {
+            return;
+        };
+        let title = lib.track(id).map(|t| t.title).unwrap_or_default();
+        let mut dialog = rfd::FileDialog::new()
+            .set_title(format!("Locate “{title}”"))
+            .add_filter("Audio", djk_analysis::decode::SUPPORTED_EXTENSIONS);
+        if let Some(dir) = lib
+            .source_path(id)
+            .ok()
+            .flatten()
+            .and_then(|p| p.parent().map(Path::to_path_buf))
+            .filter(|d| d.is_dir())
+        {
+            dialog = dialog.set_directory(dir);
+        }
+        let Some(picked) = dialog.pick_file() else {
+            return;
+        };
+        let msg = match lib.relink(id, &picked) {
+            Ok(()) => format!("Found it: “{title}” is back in the vault"),
+            Err(LibraryError::NotSameFile) => {
+                "That file is not the same as the missing one, so nothing was copied".into()
+            }
+            Err(LibraryError::Occupied(p)) => format!(
+                "A different file is already at {}. Move it away and try again",
+                p.display()
+            ),
+            Err(e) => format!("Could not restore the file: {e}"),
+        };
+        if let Some(pool) = &self.pool {
+            pool.rescan(lib);
+        }
+        self.notify(msg);
+        self.rows_dirty = true;
+        self.check_missing = true;
     }
 
     /// Remove the track at `row` from the open set. It stays in the library.
@@ -546,19 +715,20 @@ impl DjApp {
         }
         let progress = Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let (tx, rx) = std::sync::mpsc::channel();
-        let dir = self.data_dir.clone();
+        let Some(vault) = self.vault.clone() else {
+            return;
+        };
         let p = progress.clone();
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("djk-import".into())
             .spawn(move || {
-                let result = Library::open_in(&dir)
+                let result = Library::open_worker(&vault)
                     .and_then(|mut lib| {
+                        // Each file is copied now, so progress is worth showing per file.
                         let summary = lib.import_paths(&paths, |n| {
                             p.store(n, std::sync::atomic::Ordering::Relaxed);
-                            if n % 25 == 0 {
-                                ctx.request_repaint();
-                            }
+                            ctx.request_repaint();
                         })?;
                         let mut added_to_set = 0;
                         if let Some(set) = into_set {
@@ -566,7 +736,11 @@ impl DjApp {
                                 added_to_set += usize::from(lib.add_to_set(set, id)?);
                             }
                         }
-                        Ok((summary, into_set.map(|_| added_to_set)))
+                        Ok(ImportOutcome {
+                            summary,
+                            added_to_set: into_set.map(|_| added_to_set),
+                            warnings: lib.take_warnings(),
+                        })
                     })
                     .map_err(|e| e.to_string());
                 let _ = tx.send(result);
@@ -579,9 +753,9 @@ impl DjApp {
         });
     }
 
-    /// Files or folders dropped onto the window.
+    /// Files or folders dropped onto the window (ignored while no vault is open).
     pub fn handle_dropped(&mut self, paths: Vec<PathBuf>, ctx: &egui::Context) {
-        if paths.is_empty() {
+        if paths.is_empty() || self.vault.is_none() {
             return;
         }
         let into_set = match self.view {
@@ -598,10 +772,17 @@ impl DjApp {
         };
         self.import = None;
         match result {
-            Ok((s, added_to_set)) => {
+            Ok(ImportOutcome {
+                summary: s,
+                added_to_set,
+                warnings,
+            }) => {
                 let mut msg = format!("Import finished: {} added", s.added);
+                if s.added > 0 {
+                    msg += &format!(" ({} copied)", crate::util::fmt_bytes(s.bytes_copied));
+                }
                 if s.existing > 0 {
-                    msg += &format!(", {} already in library", s.existing);
+                    msg += &format!(", {} already in the vault", s.existing);
                 }
                 if s.skipped > 0 {
                     msg += &format!(", {} skipped (unreadable)", s.skipped);
@@ -613,12 +794,22 @@ impl DjApp {
                     msg += &format!(" · {n} added to the set");
                     self.reload_sets();
                 }
+                if let Some(w) = warnings.first() {
+                    msg += &format!(" · {w}");
+                }
                 self.notify(msg);
                 if let (Some(pool), Some(lib)) = (&self.pool, self.library.as_mut()) {
                     pool.rescan(lib);
                 }
             }
-            Err(e) => self.notify(format!("Import failed: {e}")),
+            Err(e) => {
+                self.notify(format!(
+                    "Import could not finish: {e}. Tracks copied before this are in the vault"
+                ));
+                if let (Some(pool), Some(lib)) = (&self.pool, self.library.as_mut()) {
+                    pool.rescan(lib);
+                }
+            }
         }
         self.rows_dirty = true;
         self.check_missing = true;
@@ -710,7 +901,7 @@ impl DjApp {
             Ok(p) => p,
             Err(djk_library::LibraryError::Missing(_)) => {
                 self.rows_dirty = true;
-                self.deck_message(deck, "File is missing — cannot load");
+                self.deck_message(deck, "Not in the vault — right-click it to locate the file");
                 return;
             }
             Err(e) => {
@@ -1011,6 +1202,23 @@ impl DjApp {
     }
 }
 
+/// A vault that can't be opened, in words for the welcome screen.
+fn describe_vault_error(e: &LibraryError) -> String {
+    match e {
+        LibraryError::Unavailable(p) => format!(
+            "{} is not available. If it is on a USB stick or another drive, connect it and \
+             open it again.",
+            p.display()
+        ),
+        LibraryError::NotAVault(p) => format!("{} is not a djkitty vault", p.display()),
+        LibraryError::NewerFormat(p) => format!(
+            "{} was made by a newer version of djkitty. Update djkitty to open it.",
+            p.display()
+        ),
+        e => format!("The vault could not be opened: {e}"),
+    }
+}
+
 impl eframe::App for DjApp {
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.audio.poll();
@@ -1070,7 +1278,7 @@ impl eframe::App for DjApp {
         self.handle_dropped(dropped, &ctx);
         crate::shortcuts::handle(self, &ctx);
         crate::ui::layout(self, ui);
-        if hovering {
+        if hovering && self.vault.is_some() {
             crate::ui::drop_overlay(self, &ctx);
         }
         crate::layout_dump::end_frame();

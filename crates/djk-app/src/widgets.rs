@@ -666,6 +666,9 @@ pub mod icons {
         egui::include_image!("../assets/icons/chevron-up.svg");
     pub const FILE: ImageSource<'static> = egui::include_image!("../assets/icons/file.svg");
     pub const FOLDER: ImageSource<'static> = egui::include_image!("../assets/icons/folder.svg");
+    /// A broken chain link: a track whose file is not in the vault.
+    pub const LINK_BROKEN: ImageSource<'static> =
+        egui::include_image!("../assets/icons/link-broken.svg");
     /// The app logo (full colour: don't tint it).
     pub const LOGO: ImageSource<'static> = egui::include_image!("../assets/logo.svg");
 }
