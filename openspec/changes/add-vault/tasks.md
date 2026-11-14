@@ -54,7 +54,7 @@
 
 ## 9. End-to-end check
 
-- [ ] 9.1 Create a vault, import a real folder (including a file with a reserved or invalid name, a duplicate copy and a same-named different file), build two sets, set hot cues and edit a grid, then copy the vault to a USB stick and open it on the stick (and on another computer if available). Verify every track loads with its cues and grid, the set files open in VLC, and the original folder is unchanged
+- [x] 9.1 Create a vault, import a real folder (including a file with a reserved or invalid name, a duplicate copy and a same-named different file), build two sets, set hot cues and edit a grid, then copy the vault to a USB stick and open it on the stick (and on another computer if available). Verify every track loads with its cues and grid, the set files open in VLC, and the original folder is unchanged → Verified 2026-11-14 by the user.
 - [x] 9.2 Run `cargo fmt --check`, `cargo clippy --workspace -- -D warnings` and `cargo test --workspace`. Verify all pass
 
 ## Workflow follow-up
