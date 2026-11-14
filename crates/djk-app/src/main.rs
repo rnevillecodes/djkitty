@@ -15,6 +15,7 @@ mod shortcuts;
 mod theme;
 mod ui;
 mod util;
+mod vault_ui;
 mod waveview;
 mod widgets;
 

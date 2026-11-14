@@ -1,10 +1,12 @@
-//! Track queries, analysis records and missing-file detection.
+//! Track queries, analysis records, removal, missing-file detection and relinking.
 
 use std::path::{Path, PathBuf};
 
 use djk_core::{Beatgrid, HOT_CUE_COUNT, Key, TrackId};
 use rusqlite::{OptionalExtension, Row, params};
 
+use crate::files::{CopyError, FileRemoval, copy_hashing, hash_file};
+use crate::vault::{Vault, is_catalog_rel};
 use crate::{Library, LibraryError, Result, file_stamp};
 
 /// One track as shown in the library and set views.
@@ -74,12 +76,13 @@ pub struct TrackQuery {
 const TRACK_COLUMNS: &str = "t.id, t.path, t.title, t.artist, COALESCE(t.user_grid_bpm, a.bpm), \
      a.key, a.duration_ms, t.missing, a.track_id IS NOT NULL, a.lufs";
 
-pub(crate) fn track_from_row(r: &Row<'_>) -> rusqlite::Result<TrackRow> {
+/// Reads a [`TRACK_COLUMNS`] row, resolving its vault-relative path against `vault`.
+pub(crate) fn track_from_row(vault: &Vault, r: &Row<'_>) -> rusqlite::Result<TrackRow> {
     let key: Option<i64> = r.get(5)?;
     let duration_ms: Option<i64> = r.get(6)?;
     Ok(TrackRow {
         id: TrackId(r.get(0)?),
-        path: PathBuf::from(r.get::<_, String>(1)?),
+        path: vault.resolve(&r.get::<_, String>(1)?),
         title: r.get(2)?,
         artist: r.get(3)?,
         bpm: r.get::<_, Option<f64>>(4)?.map(|b| b as f32),
@@ -154,7 +157,7 @@ impl Library {
         let needle = query.search.trim().to_lowercase();
         // A row that fails to read is an error, not a track silently left out.
         let mut rows = stmt
-            .query_map([], track_from_row)?
+            .query_map([], |r| track_from_row(&self.vault, r))?
             .collect::<rusqlite::Result<Vec<TrackRow>>>()?;
         rows.retain(|r| matches_search(r, &needle));
         sort_tracks(&mut rows, query.sort, query.descending);
@@ -163,11 +166,9 @@ impl Library {
 
     pub fn track(&self, id: TrackId) -> Result<TrackRow> {
         self.conn
-            .query_row(
-                &select_tracks_sql("WHERE t.id = ?1"),
-                [id.0],
-                track_from_row,
-            )
+            .query_row(&select_tracks_sql("WHERE t.id = ?1"), [id.0], |r| {
+                track_from_row(&self.vault, r)
+            })
             .optional()?
             .ok_or(LibraryError::NotFound)
     }
@@ -179,18 +180,26 @@ impl Library {
             as usize)
     }
 
-    /// Remove a track from the library: its row, its analysis and its place in every set.
-    ///
-    /// The audio file itself is never touched. The only file removed is djkitty's own
-    /// cached waveform for the track, which lives in the library's data folder.
-    /// Importing the file again adds it back.
-    pub fn remove_track(&mut self, id: TrackId) -> Result<()> {
+    /// Remove a track from the library (its row, analysis, hot cues and place in every set)
+    /// and permanently delete its copy in the vault's Catalog. Original files are never
+    /// touched. The row goes first, so a failed delete leaves a stray file in the Catalog,
+    /// never a track without a file.
+    pub fn remove_track(&mut self, id: TrackId) -> Result<FileRemoval> {
+        let rel: String = self
+            .conn
+            .query_row("SELECT path FROM tracks WHERE id = ?1", [id.0], |r| {
+                r.get(0)
+            })
+            .optional()?
+            .ok_or(LibraryError::NotFound)?;
+        let sets = self.sets_with_track(id)?;
         self.conn
             .execute("DELETE FROM tracks WHERE id = ?1", [id.0])?;
-        let cache = self.waveform_path(id);
-        debug_assert!(cache.starts_with(&self.cache_dir));
-        let _ = std::fs::remove_file(cache);
-        Ok(())
+        for set in sets {
+            self.write_set_file(set)?;
+        }
+        let _ = std::fs::remove_file(self.waveform_path(id));
+        Ok(self.delete_catalog_file(&rel))
     }
 
     /// How many sets contain the track.
@@ -209,6 +218,7 @@ impl Library {
         let tx = self.conn.transaction()?;
         {
             let mut get = tx.prepare_cached("SELECT path, missing FROM tracks WHERE id = ?1")?;
+            let vault = &self.vault;
             let mut set = tx.prepare_cached("UPDATE tracks SET missing = ?2 WHERE id = ?1")?;
             for &id in ids {
                 let Some((path, was_missing)) = get
@@ -219,7 +229,7 @@ impl Library {
                 else {
                     continue;
                 };
-                let missing = !Path::new(&path).is_file();
+                let missing = !vault.resolve(&path).is_file();
                 if missing != was_missing {
                     set.execute(params![id.0, missing])?;
                     changed.push(id);
@@ -443,7 +453,7 @@ impl Library {
         // back (e.g. a drive plugged in again) even if unchanged and needing no analysis.
         let mut recheck = Vec::new();
         for (id, path, flagged_missing, size, mtime, version) in rows {
-            let path = PathBuf::from(path);
+            let path = self.vault.resolve(&path);
             match file_stamp(&path) {
                 Ok(stamp) => {
                     if flagged_missing {
@@ -464,5 +474,74 @@ impl Library {
     /// Current file stamp of a path (size, mtime), as stored with analysis.
     pub fn stamp(path: &Path) -> Result<(i64, i64)> {
         Ok(file_stamp(path)?)
+    }
+
+    /// Where a track was imported from (it may no longer exist).
+    pub fn source_path(&self, id: TrackId) -> Result<Option<PathBuf>> {
+        let source: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT source_path FROM tracks WHERE id = ?1",
+                [id.0],
+                |r| r.get(0),
+            )
+            .optional()?
+            .ok_or(LibraryError::NotFound)?;
+        Ok(source.map(PathBuf::from))
+    }
+
+    /// Repair a track whose Catalog file is missing from `picked`, any file with exactly
+    /// the same content: it is copied back to the track's place in the Catalog, keeping
+    /// the track's hot cues, beatgrid and sets. `picked` itself is only read.
+    ///
+    /// Fails with [`LibraryError::NotSameFile`] if the content differs, and with
+    /// [`LibraryError::Occupied`] if a different file now sits at the track's place.
+    pub fn relink(&mut self, id: TrackId, picked: &Path) -> Result<()> {
+        let (hash, rel): (String, String) = self
+            .conn
+            .query_row("SELECT hash, path FROM tracks WHERE id = ?1", [id.0], |r| {
+                Ok((r.get(0)?, r.get(1)?))
+            })
+            .optional()?
+            .ok_or(LibraryError::NotFound)?;
+        if hash_file(picked)? != hash {
+            return Err(LibraryError::NotSameFile);
+        }
+        if !is_catalog_rel(&rel) {
+            tracing::warn!("track {} is stored outside the Catalog ({rel})", id.0);
+            return Err(LibraryError::Occupied(self.vault.resolve(&rel)));
+        }
+        let dest = self.vault.resolve(&rel);
+        if dest.exists() {
+            // Already back (e.g. restored by hand): only the flag needs clearing.
+            if !dest.is_file() || hash_file(&dest)? != hash {
+                return Err(LibraryError::Occupied(dest));
+            }
+        } else {
+            let part = self.new_part_path();
+            match copy_hashing(picked, &part) {
+                Ok((h, _)) if h == hash => {}
+                Ok(_) => {
+                    let _ = std::fs::remove_file(&part);
+                    return Err(LibraryError::NotSameFile);
+                }
+                Err(CopyError::Source(e)) => return Err(e.into()),
+                Err(CopyError::Dest(e)) => return Err(LibraryError::VaultWrite(e)),
+            }
+            let placed = dest
+                .parent()
+                .map_or(Ok(()), std::fs::create_dir_all)
+                .and_then(|()| std::fs::rename(&part, &dest));
+            if let Err(e) = placed {
+                let _ = std::fs::remove_file(&part);
+                return Err(LibraryError::VaultWrite(e));
+            }
+        }
+        let (size, mtime) = file_stamp(&dest)?;
+        self.conn.execute(
+            "UPDATE tracks SET missing = 0, size = ?2, mtime = ?3 WHERE id = ?1",
+            params![id.0, size, mtime],
+        )?;
+        Ok(())
     }
 }

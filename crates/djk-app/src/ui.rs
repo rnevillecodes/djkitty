@@ -57,6 +57,18 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
             decks_row(app, ui);
         });
     dump("panel.top", r.response.rect);
+    // No vault open: the welcome screen takes the library's place (the decks and mixer
+    // stay, so audio problems remain visible).
+    if app.vault.is_none() {
+        let r = egui::CentralPanel::default().show(ui, |ui| crate::vault_ui::welcome(app, ui));
+        dump("panel.library", r.response.rect);
+        if app.show_shortcuts {
+            shortcuts_window(app, ui.ctx());
+        }
+        crate::vault_ui::create_dialog(app, ui.ctx());
+        crate::vault_ui::cloud_dialog(app, ui.ctx());
+        return;
+    }
     let r = egui::Panel::left("sidebar")
         .resizable(true)
         .default_size(230.0)
@@ -101,6 +113,8 @@ pub fn layout(app: &mut DjApp, ui: &mut Ui) {
     if app.clear_cues_prompt.is_some() {
         clear_cues_dialog(app, ui.ctx());
     }
+    crate::vault_ui::create_dialog(app, ui.ctx());
+    crate::vault_ui::cloud_dialog(app, ui.ctx());
 }
 
 // ---------------------------------------------------------------- decks + mixer
@@ -1585,7 +1599,8 @@ fn new_set_dialog(app: &mut DjApp, ctx: &egui::Context) {
     }
 }
 
-/// "Remove from library?" confirmation. Makes clear the audio file is never deleted.
+/// "Remove from library?" confirmation. Makes clear that the vault copy is deleted for
+/// good and the original file is not.
 fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
     let Some(prompt) = &app.remove_prompt else {
         return;
@@ -1605,9 +1620,14 @@ fn remove_dialog(app: &mut DjApp, ctx: &egui::Context) {
         ui.label(format!("“{title}” will be removed from {where_from}."));
         ui.add_space(4.0);
         ui.label(
+            "Its copy in your vault is deleted permanently, along with its hot cues and \
+             beatgrid. This can't be undone.",
+        );
+        ui.add_space(4.0);
+        ui.label(
             RichText::new(
-                "The audio file stays on your disk; nothing is deleted. \
-                 Importing it again adds it back.",
+                "Your original file is not affected. Importing it again adds it back as a \
+                 new track.",
             )
             .small()
             .color(theme::TEXT_DIM),
@@ -1975,7 +1995,23 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
         });
     if row.missing {
         ui.add_space(6.0);
-        ui.colored_label(theme::DANGER, "File is missing");
+        let mut locate = false;
+        ui.horizontal(|ui| {
+            ui.add(widgets::icon(
+                widgets::icons::LINK_BROKEN,
+                16.0,
+                theme::DANGER,
+            ));
+            ui.colored_label(theme::DANGER, "Not in the vault");
+            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                locate = widgets::lit_button(ui, true, None, egui::Button::new("Locate file…"))
+                    .on_hover_text(MISSING_HELP)
+                    .clicked();
+            });
+        });
+        if locate {
+            app.locate_file(row.id);
+        }
     }
     ui.add_space(10.0);
     section_heading(ui, "LOCATION");
@@ -1997,9 +2033,15 @@ fn track_details(app: &mut DjApp, ui: &mut Ui) {
 
 // ---------------------------------------------------------------- browser
 
+/// Hover text for the broken link icon and Locate file….
+const MISSING_HELP: &str = "This track's file is not in the vault (it was moved or deleted \
+     outside djkitty). Locate file… copies it back from any copy of the same file.";
+
 fn browser(app: &mut DjApp, ui: &mut Ui) {
     // Toolbar.
     ui.horizontal(|ui| {
+        crate::vault_ui::switcher(app, ui);
+        ui.add_space(6.0);
         // Title, as a breadcrumb when a set is open: "Library / Set name", where
         // clicking "Library" goes back to the full library.
         match app.view {
@@ -2108,6 +2150,7 @@ enum RowAction {
     RemoveFromSet(usize),
     RemoveFromLibrary(usize),
     ClearHotCues(usize),
+    Locate(usize),
     Move(usize, usize),
 }
 
@@ -2228,14 +2271,19 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                     }
                 });
                 row.col(|ui| {
+                    if t.missing {
+                        ui.add(widgets::icon(
+                            widgets::icons::LINK_BROKEN,
+                            14.0,
+                            theme::DANGER,
+                        ))
+                        .on_hover_text(MISSING_HELP);
+                    }
                     ui.add(
                         egui::Label::new(dim(RichText::new(&t.title)))
                             .truncate()
                             .selectable(false),
                     );
-                    if t.missing {
-                        ui.label(RichText::new("missing").small().color(theme::DANGER));
-                    }
                 });
                 row.col(|ui| {
                     ui.add(
@@ -2343,6 +2391,15 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                             ui.close();
                         }
                     }
+                    if t.missing
+                        && ui
+                            .button("Locate file…")
+                            .on_hover_text(MISSING_HELP)
+                            .clicked()
+                    {
+                        action = Some(RowAction::Locate(i));
+                        ui.close();
+                    }
                     ui.separator();
                     ui.menu_button("Add to set", |ui| {
                         if sets.is_empty() {
@@ -2369,7 +2426,8 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    // Neither option touches the audio file on disk.
+                    // Removing from a set keeps the file; removing from the library
+                    // deletes the vault's copy (never the original).
                     if in_set
                         && ui
                             .add(egui::Button::new("Remove from set").shortcut_text("Del"))
@@ -2386,7 +2444,10 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
                     };
                     if ui
                         .add(lib_remove)
-                        .on_hover_text("Takes it out of djkitty; the file stays on your disk")
+                        .on_hover_text(
+                            "Deletes its copy from the vault, after asking. Your original \
+                             file is not affected",
+                        )
                         .clicked()
                     {
                         action = Some(RowAction::RemoveFromLibrary(i));
@@ -2456,6 +2517,10 @@ fn track_table(app: &mut DjApp, ui: &mut Ui) {
         Some(RowAction::RemoveFromLibrary(i)) => {
             let id = app.rows[i].id;
             app.ask_remove_from_library(id);
+        }
+        Some(RowAction::Locate(i)) => {
+            let id = app.rows[i].id;
+            app.locate_file(id);
         }
         Some(RowAction::Move(from, to)) => {
             if let View::Set(set) = app.view {

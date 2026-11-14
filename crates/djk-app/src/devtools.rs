@@ -132,17 +132,14 @@ pub fn test_tone(route: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// `--import-folder <path>`: import a folder into the library without the UI, then analyse
-/// everything that needs it. Honours `DJKITTY_DATA_DIR`.
 /// `--analyse [paths…]`: print BPM, key, loudness and beatgrid for files (folders are searched). With no
-/// paths, re-analyses every track in the library and shows the stored BPM alongside.
-/// Audio files are only read and no results are saved. Opening the library does apply
-/// any pending database upgrade (schema migration).
+/// paths, re-analyses every track in the last opened vault and shows the stored BPM
+/// alongside. Audio files are only read and no results are saved.
 pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
     // (file, stored BPM if known)
     let mut files: Vec<(std::path::PathBuf, Option<f32>)> = Vec::new();
     if paths.is_empty() {
-        let lib = djk_library::Library::open_default()?;
+        let lib = last_vault_library()?;
         for t in lib.tracks(&djk_library::TrackQuery::default())? {
             files.push((t.path.clone(), t.bpm));
         }
@@ -200,19 +197,36 @@ pub fn analyse(paths: &[std::path::PathBuf]) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn import_folder(folder: &std::path::Path) -> anyhow::Result<()> {
+/// `--import-folder <path>` and `--analyse` work on the vault djkitty last had open on
+/// this computer (settings honour `DJKITTY_DATA_DIR`).
+/// The library of the vault djkitty last had open on this computer.
+fn last_vault_library() -> anyhow::Result<djk_library::Library> {
     let dir = djk_library::default_data_dir()?;
-    let mut lib = djk_library::Library::open_in(&dir)?;
+    let settings = crate::settings::Settings::load(&dir);
+    let Some(root) = settings.last_vault else {
+        anyhow::bail!("no vault yet: open a vault in djkitty first");
+    };
+    djk_library::Library::open_at(&root)
+        .map_err(|e| anyhow::anyhow!("cannot open the last vault: {e}"))
+}
+
+/// `--import-folder <path>`: import a folder into the last opened vault without the UI,
+/// then analyse everything that needs it.
+pub fn import_folder(folder: &std::path::Path) -> anyhow::Result<()> {
+    let mut lib = last_vault_library()?;
     let s = lib.import_folder(folder, |_| {})?;
     println!(
-        "Imported into {}: {} added, {} existing, {} skipped, {} ignored",
-        dir.display(),
+        "Imported into {}: {} added ({:.1} MB copied), {} already in the vault, {} skipped, \
+         {} ignored",
+        lib.vault().root().display(),
         s.added,
+        s.bytes_copied as f64 / 1e6,
         s.existing,
         s.skipped,
         s.ignored
     );
-    let pool = crate::analysis::AnalysisPool::start(&dir, crate::analysis::worker_count(), || {});
+    let vault = lib.vault().clone();
+    let pool = crate::analysis::AnalysisPool::start(&vault, crate::analysis::worker_count(), || {});
     let queued = pool.rescan(&mut lib);
     while pool.is_busy() {
         std::thread::sleep(std::time::Duration::from_millis(50));

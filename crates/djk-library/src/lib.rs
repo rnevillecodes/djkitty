@@ -1,20 +1,25 @@
-//! SQLite-backed track library, folder import and sets.
+//! SQLite-backed track library living inside a vault: import (copying into the vault's
+//! Catalog), sets (mirrored as playlist files) and analysis results.
 //!
-//! The library stores tracks (identified by path), their analysis results and user sets.
-//! Waveform data lives in per-track cache files next to the database (see
-//! [`Library::waveform_path`]).
+//! The database, the waveform cache and every audio file live inside a [`Vault`] folder.
+//! Paths are stored relative to the vault, and the library hands out absolute paths.
 
+mod files;
 mod import;
+pub mod names;
 mod schema;
 mod sets;
 mod tracks;
+mod vault;
 
 use std::path::{Path, PathBuf};
 
 use rusqlite::Connection;
 
+pub use files::FileRemoval;
 pub use import::{ImportSummary, read_tags};
 pub use schema::LATEST as SCHEMA_VERSION;
+pub use vault::{VAULT_FORMAT, Vault};
 
 /// Version of the analysis results the library stores. Bump it whenever analysis changes
 /// in a way that alters results, so existing tracks are re-analysed in the background.
@@ -43,18 +48,38 @@ pub enum LibraryError {
     Missing(PathBuf),
     #[error("cannot find a data directory for this platform")]
     NoDataDir,
+    #[error("“{0}” can't be used as a folder name")]
+    InvalidName(String),
+    #[error("{0} already exists")]
+    AlreadyExists(PathBuf),
+    #[error("{0} is not available")]
+    Unavailable(PathBuf),
+    #[error("{0} is not a djkitty vault")]
+    NotAVault(PathBuf),
+    #[error("{0} was made by a newer version of djkitty")]
+    NewerFormat(PathBuf),
+    #[error("that file is not the same as the missing one")]
+    NotSameFile,
+    #[error("a different file is already at {0}")]
+    Occupied(PathBuf),
+    #[error("could not copy into the vault: {0}")]
+    VaultWrite(std::io::Error),
 }
 
 pub type Result<T> = std::result::Result<T, LibraryError>;
 
-/// The track library.
+/// The track library of one vault.
 pub struct Library {
     conn: Connection,
-    cache_dir: PathBuf,
+    vault: Vault,
+    /// Problems that did not fail an operation (e.g. a set's playlist file could not be
+    /// written), for the app to show. See [`Library::take_warnings`].
+    warnings: Vec<String>,
 }
 
-/// Platform data directory for djkitty, e.g. `%APPDATA%\djkitty\data` on Windows.
-/// The `DJKITTY_DATA_DIR` environment variable overrides it (useful for testing).
+/// Per-computer data directory for djkitty (settings), e.g. `%APPDATA%\djkitty\data`
+/// on Windows. The `DJKITTY_DATA_DIR` environment variable overrides it (useful for
+/// testing).
 pub fn default_data_dir() -> Result<PathBuf> {
     if let Some(dir) = std::env::var_os("DJKITTY_DATA_DIR").filter(|d| !d.is_empty()) {
         return Ok(PathBuf::from(dir));
@@ -65,37 +90,50 @@ pub fn default_data_dir() -> Result<PathBuf> {
 }
 
 impl Library {
-    /// Open (creating if needed) the library in the platform data directory.
-    pub fn open_default() -> Result<Self> {
-        let dir = default_data_dir()?;
-        Self::open_in(&dir)
-    }
-
-    /// Open (creating if needed) `library.db` and the waveform cache inside `dir`.
-    pub fn open_in(dir: &Path) -> Result<Self> {
-        std::fs::create_dir_all(dir)?;
-        let cache_dir = dir.join("waveforms");
-        std::fs::create_dir_all(&cache_dir)?;
-        let conn = Connection::open(dir.join("library.db"))?;
-        Self::with_connection(conn, cache_dir)
-    }
-
-    /// An in-memory library (for tests); waveforms go to `cache_dir`.
-    pub fn open_in_memory(cache_dir: PathBuf) -> Result<Self> {
-        Self::with_connection(Connection::open_in_memory()?, cache_dir)
-    }
-
-    fn with_connection(conn: Connection, cache_dir: PathBuf) -> Result<Self> {
+    /// Open (creating if needed) the library of a vault. Leftover partial copies from an
+    /// interrupted import are removed and every set's playlist file is rewritten.
+    pub fn open(vault: &Vault) -> Result<Self> {
+        vault.clear_incoming();
+        let conn = Connection::open(vault.db_path())?;
         conn.pragma_update(None, "foreign_keys", "ON")?;
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         schema::migrate(&conn)?;
-        Ok(Self { conn, cache_dir })
+        let mut lib = Self {
+            conn,
+            vault: vault.clone(),
+            warnings: Vec::new(),
+        };
+        lib.write_all_set_files()?;
+        Ok(lib)
+    }
+
+    /// Open the vault at `root` and its library.
+    pub fn open_at(root: &Path) -> Result<Self> {
+        Self::open(&Vault::open(root)?)
+    }
+
+    /// A second connection to the same vault for a worker thread: no cleanup or set file
+    /// rewriting (the owner already did that, and must not race with it).
+    pub fn open_worker(vault: &Vault) -> Result<Self> {
+        let conn = Connection::open(vault.db_path())?;
+        conn.pragma_update(None, "foreign_keys", "ON")?;
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
+        schema::migrate(&conn)?;
+        Ok(Self {
+            conn,
+            vault: vault.clone(),
+            warnings: Vec::new(),
+        })
+    }
+
+    pub fn vault(&self) -> &Vault {
+        &self.vault
     }
 
     /// Path of a track's waveform cache file.
     pub fn waveform_path(&self, id: djk_core::TrackId) -> PathBuf {
-        self.cache_dir.join(format!("{}.wf", id.0))
+        self.vault.waveforms_dir().join(format!("{}.wf", id.0))
     }
 
     /// Schema version (for tests and diagnostics).
@@ -103,6 +141,16 @@ impl Library {
         Ok(self
             .conn
             .pragma_query_value(None, "user_version", |r| r.get(0))?)
+    }
+
+    /// Warnings gathered since the last call (each is a sentence for the user).
+    pub fn take_warnings(&mut self) -> Vec<String> {
+        std::mem::take(&mut self.warnings)
+    }
+
+    pub(crate) fn warn(&mut self, msg: String) {
+        tracing::warn!("{msg}");
+        self.warnings.push(msg);
     }
 }
 

@@ -8,7 +8,7 @@ use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Condvar, Mutex};
 
 use djk_core::TrackId;
-use djk_library::{AnalysisRecord, Library};
+use djk_library::{AnalysisRecord, Library, Vault};
 
 /// What the UI hears from the pool.
 #[derive(Debug, Clone, PartialEq)]
@@ -47,9 +47,9 @@ pub fn worker_count() -> usize {
 }
 
 impl AnalysisPool {
-    /// Start `workers` threads analysing tracks of the library in `db_dir`. `notify` is
+    /// Start `workers` threads analysing tracks of the library in `vault`. `notify` is
     /// called after each event (e.g. to request a UI repaint).
-    pub fn start(db_dir: &Path, workers: usize, notify: impl Fn() + Send + Sync + 'static) -> Self {
+    pub fn start(vault: &Vault, workers: usize, notify: impl Fn() + Send + Sync + 'static) -> Self {
         let shared = Arc::new(Shared {
             queue: Mutex::new(Queue::default()),
             wake: Condvar::new(),
@@ -62,11 +62,11 @@ impl AnalysisPool {
             .map(|i| {
                 let shared = shared.clone();
                 let tx = tx.clone();
-                let dir = db_dir.to_path_buf();
+                let vault = vault.clone();
                 let notify = notify.clone();
                 std::thread::Builder::new()
                     .name(format!("djk-analysis-{i}"))
-                    .spawn(move || worker(shared, dir, tx, move || notify()))
+                    .spawn(move || worker(shared, vault, tx, move || notify()))
                     .expect("spawn analysis worker")
             })
             .collect();
@@ -138,9 +138,9 @@ impl Drop for AnalysisPool {
     }
 }
 
-fn worker(shared: Arc<Shared>, dir: PathBuf, tx: Sender<AnalysisEvent>, notify: impl Fn()) {
+fn worker(shared: Arc<Shared>, vault: Vault, tx: Sender<AnalysisEvent>, notify: impl Fn()) {
     lower_thread_priority();
-    let mut lib = match Library::open_in(&dir) {
+    let mut lib = match Library::open_worker(&vault) {
         Ok(l) => l,
         Err(e) => {
             tracing::error!("analysis worker cannot open library: {e}");
@@ -251,7 +251,7 @@ mod tests {
     fn analyses_once_and_again_after_file_changes() {
         let tmp = tempfile::tempdir().unwrap();
         let music = tmp.path().join("music");
-        let data = tmp.path().join("data");
+        let vault = Vault::create(tmp.path(), "Vault").unwrap();
         std::fs::create_dir_all(&music).unwrap();
         for (name, to) in [
             ("tone.mp3", "a.mp3"),
@@ -260,10 +260,10 @@ mod tests {
         ] {
             std::fs::copy(fixture(name), music.join(to)).unwrap();
         }
-        let mut lib = Library::open_in(&data).unwrap();
+        let mut lib = Library::open(&vault).unwrap();
         lib.import_folder(&music, |_| {}).unwrap();
 
-        let pool = AnalysisPool::start(&data, 2, || {});
+        let pool = AnalysisPool::start(&vault, 2, || {});
         assert_eq!(pool.rescan(&mut lib), 3);
         wait_idle(&pool);
         assert_eq!(pool.progress(), (3, 3));
@@ -281,11 +281,17 @@ mod tests {
         drop(pool);
 
         // "Restart": a fresh pool finds nothing to do.
-        let pool = AnalysisPool::start(&data, 2, || {});
+        let pool = AnalysisPool::start(&vault, 2, || {});
         assert_eq!(pool.rescan(&mut lib), 0);
 
-        // Replace one file with different content at the same path.
-        std::fs::copy(fixture("tone.m4a"), music.join("c.wav")).unwrap();
+        // Replace one vault copy with different content at the same path.
+        let c = lib
+            .tracks(&Default::default())
+            .unwrap()
+            .into_iter()
+            .find(|t| t.path.ends_with("c.wav"))
+            .unwrap();
+        std::fs::copy(fixture("tone.m4a"), &c.path).unwrap();
         assert_eq!(pool.rescan(&mut lib), 1);
         wait_idle(&pool);
         assert_eq!(pool.progress(), (1, 1));
@@ -295,18 +301,19 @@ mod tests {
     fn undecodable_file_stays_in_the_library() {
         let tmp = tempfile::tempdir().unwrap();
         let music = tmp.path().join("music");
-        let data = tmp.path().join("data");
+        let vault = Vault::create(tmp.path(), "Vault").unwrap();
         std::fs::create_dir_all(&music).unwrap();
         std::fs::copy(fixture("tone.mp3"), music.join("bad.mp3")).unwrap();
-        let mut lib = Library::open_in(&data).unwrap();
+        let mut lib = Library::open(&vault).unwrap();
         lib.import_folder(&music, |_| {}).unwrap();
         let id = lib.tracks(&Default::default()).unwrap()[0].id;
         lib.set_hot_cues(id, &[Some(1.0), None, None, None, None, None, None, None])
             .unwrap();
-        // Replace it with something that can't be decoded (as if mid-copy).
-        std::fs::copy(fixture("corrupt.mp3"), music.join("bad.mp3")).unwrap();
+        // Replace its vault copy with something that can't be decoded.
+        let copy = lib.track(id).unwrap().path;
+        std::fs::copy(fixture("corrupt.mp3"), copy).unwrap();
 
-        let pool = AnalysisPool::start(&data, 1, || {});
+        let pool = AnalysisPool::start(&vault, 1, || {});
         assert_eq!(pool.rescan(&mut lib), 1);
         wait_idle(&pool);
         let ev = pool.try_event();
